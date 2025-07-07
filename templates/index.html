@@ -4,36 +4,499 @@
     <meta charset="UTF-8">
     <title>Three.js サンプル</title>
     <style>
+        #mode-bar {
+            width: 100vw;
+            background: #333;
+            color: #fff;
+            padding: 8px 0 0 0;
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 30;
+        }
+        #mode-bar button {
+            background: #555;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px 4px 0 0;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #mode-bar button.active {
+            background: #ff9800;
+            color: #222;
+        }
+        /* カスタムアラート */
+        #custom-alert {
+            position: fixed;
+            background: rgba(50,0,0,0.9);
+            color: #fff;
+            padding: 6px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10000;
+            display: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            transition: opacity 0.2s;
+        }
         body { margin: 0; }
         canvas { display: block; }
+        #menu-bar {
+            width: 100vw;
+            background: #222;
+            color: #fff;
+            padding: 8px 0;
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            position: fixed;
+            top: 48px;
+            left: 0;
+            z-index: 20;
+        }
+        #menu-bar button {
+            background: #444;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        #menu-bar button:hover {
+            background: #666;
+        }
     </style>
 </head>
 <body>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+    <div id="mode-bar">
+        <button id="mode-object" class="active">オブジェクト</button>
+        <button id="mode-edit">編集</button>
+    </div>
+    <div id="custom-alert"></div>
+    <div id="menu-bar">
+        <button id="add-cube">立方体</button>
+        <button id="add-sphere">球体</button>
+        <button id="add-plane">平面</button>
+    </div>
+    <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://unpkg.com/three@0.147.0/examples/js/controls/TransformControls.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        // シーン、カメラ、レンダラーの作成
+        // --- Three.js初期化 ---
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer();
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.domElement.style.marginTop = '96px'; // モードバー+メニューバー分の余白
         document.body.appendChild(renderer.domElement);
-
-        // 立方体の作成
-        const geometry = new THREE.BoxGeometry();
-        const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-        const cube = new THREE.Mesh(geometry, material);
-        scene.add(cube);
-
         camera.position.z = 5;
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.screenSpacePanning = false;
+        controls.minDistance = 1;
+        controls.maxDistance = 1000;
+        const transformControls = new THREE.TransformControls(camera, renderer.domElement);
+        scene.add(transformControls);
+        transformControls.setMode('translate');
+        transformControls.visible = false;
+        transformControls.addEventListener('dragging-changed', function (event) {
+            controls.enabled = !event.value;
+        });
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(5, 10, 7.5);
+        scene.add(directionalLight);
+
+        // --- 頂点編集用ハンドル（同一座標グループ化対応） ---
+        let vertexHandles = [];
+        let vertexGroups = [];
+        function showVertexHandles(mesh) {
+            removeVertexHandles();
+            vertexGroups = [];
+            if (!mesh.geometry || !mesh.geometry.attributes || !mesh.geometry.attributes.position) return;
+            const posAttr = mesh.geometry.attributes.position;
+            const groups = [];
+            const used = new Array(posAttr.count).fill(false);
+            const EPS = 1e-5;
+            for (let i = 0; i < posAttr.count; i++) {
+                if (used[i]) continue;
+                const vi = new THREE.Vector3().fromBufferAttribute(posAttr, i);
+                const group = [i];
+                used[i] = true;
+                for (let j = i + 1; j < posAttr.count; j++) {
+                    if (used[j]) continue;
+                    const vj = new THREE.Vector3().fromBufferAttribute(posAttr, j);
+                    if (vi.distanceTo(vj) < EPS) {
+                        group.push(j);
+                        used[j] = true;
+                    }
+                }
+                groups.push({ indices: group, position: vi });
+            }
+            vertexGroups = groups;
+            for (let g = 0; g < groups.length; g++) {
+                const vertex = groups[g].position.clone().applyMatrix4(mesh.matrixWorld);
+                const handleGeom = new THREE.SphereGeometry(0.07, 12, 12);
+                const handleMat = new THREE.MeshBasicMaterial({ color: 0xff9800 });
+                const handle = new THREE.Mesh(handleGeom, handleMat);
+                handle.position.copy(vertex);
+                handle.userData.vertexIndices = groups[g].indices;
+                handle.userData.parentMesh = mesh;
+                vertexHandles.push(handle);
+                scene.add(handle);
+            }
+        }
+        function removeVertexHandles() {
+            vertexHandles.forEach(h => scene.remove(h));
+            vertexHandles = [];
+            vertexGroups = [];
+        }
+
+        // 頂点ハンドルのドラッグ処理（グループ対応）
+        let draggingHandle = null;
+        let dragOffset = new THREE.Vector3();
+        renderer.domElement.addEventListener('pointerdown', (event) => {
+            if (mode !== 'edit') return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(vertexHandles, false);
+            if (intersects.length > 0) {
+                draggingHandle = intersects[0].object;
+                dragOffset.copy(draggingHandle.position);
+                controls.enabled = false; // ドラッグ中は視点操作を無効化
+            }
+        });
+        renderer.domElement.addEventListener('pointermove', (event) => {
+            if (mode !== 'edit' || !draggingHandle) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            // 平面上での移動（カメラ正面の平面）
+            const plane = new THREE.Plane();
+            plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), draggingHandle.position);
+            const pointer = new THREE.Vector2(mouse.x, mouse.y);
+            const ray = raycaster.ray;
+            const intersection = new THREE.Vector3();
+            if (ray.intersectPlane(plane, intersection)) {
+                draggingHandle.position.copy(intersection);
+                // 頂点グループ全てを更新
+                const mesh = draggingHandle.userData.parentMesh;
+                const indices = draggingHandle.userData.vertexIndices;
+                // ローカル座標に変換
+                const local = mesh.worldToLocal(intersection.clone());
+                indices.forEach(idx => {
+                    mesh.geometry.attributes.position.setXYZ(idx, local.x, local.y, local.z);
+                });
+                mesh.geometry.attributes.position.needsUpdate = true;
+                // --- 追加: サーバーへ頂点編集を通知（グループ全体） ---
+                if (mesh.userData.serverId !== undefined) {
+                    socket.emit('edit_vertex', {
+                        id: mesh.userData.serverId,
+                        vertex_indices: indices,
+                        position: { x: local.x, y: local.y, z: local.z }
+                    });
+                }
+            }
+        });
+        renderer.domElement.addEventListener('pointerup', () => {
+            if (draggingHandle) {
+                draggingHandle = null;
+                controls.enabled = true; // ドラッグ終了で視点操作を有効化
+            }
+        });
+
+        // --- モード管理 ---
+        let mode = 'object'; // 'object' or 'edit'
+        document.getElementById('mode-object').onclick = () => setMode('object');
+        document.getElementById('mode-edit').onclick = () => setMode('edit');
+        function setMode(newMode) {
+            mode = newMode;
+            document.getElementById('mode-object').classList.toggle('active', mode === 'object');
+            document.getElementById('mode-edit').classList.toggle('active', mode === 'edit');
+            if (mode === 'object') {
+                if (vertexHandles.length > 0) removeVertexHandles();
+                transformControls.visible = !!selectedObject;
+            } else if (mode === 'edit') {
+                transformControls.visible = false;
+                if (selectedObject) showVertexHandles(selectedObject);
+            }
+        }
+        // カスタムアラート表示関数
+        function showCustomAlert(msg, x, y) {
+            const alertDiv = document.getElementById('custom-alert');
+            alertDiv.textContent = msg;
+            alertDiv.style.left = x + 12 + 'px';
+            alertDiv.style.top = y + 12 + 'px';
+            alertDiv.style.display = 'block';
+            alertDiv.style.opacity = '1';
+            setTimeout(() => {
+                alertDiv.style.opacity = '0';
+                setTimeout(() => { alertDiv.style.display = 'none'; }, 200);
+            }, 1200);
+        }
+        // --- Socket.IO クライアント接続 ---
+        const socket = io();
+        // idとオブジェクトの対応表
+        const idToObject = {};
+        // サーバーから初期オブジェクトを受信
+        socket.on('init_objects', (objs) => {
+            objs.forEach(obj => {
+                createObjectFromServer(obj);
+            });
+        });
+        // サーバーから新規オブジェクト追加を受信
+        socket.on('add_object', (obj) => {
+            createObjectFromServer(obj);
+        });
+        // サーバーから移動イベントを受信
+        socket.on('move_object', (data) => {
+            const obj = idToObject[data.id];
+            if (obj) {
+                obj.position.set(data.position.x, data.position.y, data.position.z);
+            }
+        });
+        // --- 頂点編集のリアルタイム同期受信 ---
+        socket.on('edit_vertex', (data) => {
+            const obj = idToObject[data.id];
+            if (!obj || !obj.geometry || !obj.geometry.attributes || !obj.geometry.attributes.position) return;
+            (data.vertex_indices || [data.vertex_index]).forEach(idx => {
+                obj.geometry.attributes.position.setXYZ(idx, data.position.x, data.position.y, data.position.z);
+            });
+            obj.geometry.attributes.position.needsUpdate = true;
+            // ハンドルも動かす
+            if (vertexHandles) {
+                // どのハンドルか特定
+                for (let h = 0; h < vertexHandles.length; h++) {
+                    const handle = vertexHandles[h];
+                    if (JSON.stringify(handle.userData.vertexIndices) === JSON.stringify(data.vertex_indices)) {
+                        // ワールド座標に変換
+                        const world = obj.localToWorld(new THREE.Vector3(data.position.x, data.position.y, data.position.z));
+                        handle.position.copy(world);
+                        break;
+                    }
+                }
+            }
+        });
+        // サーバーから受信したオブジェクトを生成
+        function createObjectFromServer(obj) {
+            let mesh;
+            if (obj.type === 'cube') {
+                const geometry = new THREE.BoxGeometry(1, 1, 1);
+                const material = new THREE.MeshStandardMaterial({ color: obj.color || 0x00ff00 });
+                mesh = new THREE.Mesh(geometry, material);
+            } else if (obj.type === 'sphere') {
+                const geometry = new THREE.SphereGeometry(0.5, 32, 32);
+                const material = new THREE.MeshStandardMaterial({ color: obj.color || 0x2196f3 });
+                mesh = new THREE.Mesh(geometry, material);
+            } else if (obj.type === 'plane') {
+                const geometry = new THREE.PlaneGeometry(2, 2);
+                const material = new THREE.MeshStandardMaterial({ color: obj.color || 0x9e9e9e, side: THREE.DoubleSide });
+                mesh = new THREE.Mesh(geometry, material);
+            } else {
+                return;
+            }
+            mesh.position.set(obj.position.x, obj.position.y, obj.position.z);
+            scene.add(mesh);
+            selectableObjects.push(mesh);
+            idToObject[obj.id] = mesh;
+            mesh.userData.serverId = obj.id;
+        }
+
+        // ...Three.js初期化は上部で1回のみ...
+
+        // GLBモデルを指定位置に配置する関数
+        function loadGLBModel(modelName, x, y, z) {
+            const loader = new THREE.GLTFLoader();
+            loader.load(
+                `/static/models/${modelName}`,
+                function (gltf) {
+                    const model = gltf.scene;
+                    model.position.set(x, y, z);
+                    scene.add(model);
+                    selectableObjects.push(model);
+                },
+                undefined,
+                function (error) {
+                    console.error('モデルの読み込みに失敗しました:', error);
+                }
+            );
+        }
+
+        // 選択可能オブジェクト管理
+        const selectableObjects = [];
+        let selectedObject = null;
+
+        // --- 選択状態の同期 ---
+        // 選択中のオブジェクトid→選択ユーザーsid
+        const selectedBy = {};
+        let mySid = null;
+        socket.on('connect', () => {
+            mySid = socket.id;
+        });
+        socket.on('object_selected', ({id, sid}) => {
+            selectedBy[id] = sid;
+            // 他人が選択した場合は色を赤に
+            if (idToObject[id] && sid !== mySid) {
+                idToObject[id].material.emissive = new THREE.Color(0xff0000);
+            }
+        });
+        socket.on('object_deselected', ({id}) => {
+            delete selectedBy[id];
+            // 色を元に戻す
+            if (idToObject[id]) {
+                idToObject[id].material.emissive = new THREE.Color(0x000000);
+            }
+        });
+        // 選択リクエストの結果
+        socket.on('select_result', ({id, result}) => {
+            if (!result && idToObject[id]) {
+                // マウス座標取得
+                document.addEventListener('mousemove', function handler(e) {
+                    showCustomAlert('他のユーザーが選択中です', e.clientX, e.clientY);
+                    document.removeEventListener('mousemove', handler);
+                });
+            }
+        });
+
+        // 選択状態の見た目を変更する関数
+        function setSelectedObject(obj) {
+            // 既存の選択解除処理
+            if (selectedObject) {
+                if (selectedObject.material && selectedObject.userData.originalColor) {
+                    selectedObject.material.color.set(selectedObject.userData.originalColor);
+                }
+                if (selectedObject.children && selectedObject.children.length > 0) {
+                    selectedObject.traverse(child => {
+                        if (child.material && child.userData.originalColor) {
+                            child.material.color.set(child.userData.originalColor);
+                        }
+                    });
+                }
+                transformControls.detach();
+                transformControls.visible = false;
+                if (vertexHandles.length > 0) removeVertexHandles();
+                // サーバーに選択解除を通知
+                if (selectedObject.userData.serverId) {
+                    socket.emit('deselect_object', {id: selectedObject.userData.serverId});
+                }
+            }
+            selectedObject = obj;
+            if (selectedObject) {
+                // サーバーに選択リクエスト
+                if (selectedObject.userData.serverId) {
+                    socket.emit('select_object', {id: selectedObject.userData.serverId});
+                }
+                // 選択: 色を黄色に
+                if (selectedObject.material) {
+                    selectedObject.userData.originalColor = selectedObject.material.color.getHex();
+                    selectedObject.material.color.set(0xffff00);
+                }
+                if (selectedObject.children && selectedObject.children.length > 0) {
+                    selectedObject.traverse(child => {
+                        if (child.material) {
+                            child.userData.originalColor = child.material.color.getHex();
+                            child.material.color.set(0xffff00);
+                        }
+                    });
+                }
+                if (mode === 'object') {
+                    transformControls.attach(selectedObject);
+                    transformControls.visible = true;
+                } else if (mode === 'edit') {
+                    showVertexHandles(selectedObject);
+                }
+            }
+        }
+
+        // 立方体を設置する関数
+        function addCube() {
+            socket.emit('add_object', {
+                type: 'cube',
+                position: { x: 0, y: 0, z: 0 },
+                color: 0x00ff00
+            });
+        }
+        // 球体を設置する関数
+        function addSphere() {
+            socket.emit('add_object', {
+                type: 'sphere',
+                position: { x: 0, y: 0, z: 0 },
+                color: 0x2196f3
+            });
+        }
+        // 平面を設置する関数
+        function addPlane() {
+            socket.emit('add_object', {
+                type: 'plane',
+                position: { x: 0, y: 0, z: 0 },
+                color: 0x9e9e9e
+            });
+        }
+
+        // メニューボタンイベント
+        document.getElementById('add-cube').onclick = addCube;
+        document.getElementById('add-sphere').onclick = addSphere;
+        document.getElementById('add-plane').onclick = addPlane;
+
+        // オブジェクト選択処理
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        renderer.domElement.addEventListener('pointerdown', (event) => {
+            if (transformControls.dragging) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(selectableObjects, true);
+            if (intersects.length > 0) {
+                const obj = intersects[0].object;
+                // 他ユーザーが選択中なら選択不可
+                if (obj.userData.serverId && selectedBy[obj.userData.serverId] && selectedBy[obj.userData.serverId] !== mySid) {
+                    showCustomAlert('他のユーザーが選択中です', event.clientX, event.clientY);
+                    return;
+                }
+                setSelectedObject(obj);
+            } else {
+                setSelectedObject(null);
+            }
+        });
+
+        // TransformControlsで移動したらサーバーに通知
+        transformControls.addEventListener('objectChange', function () {
+            if (selectedObject && selectedObject.userData.serverId) {
+                socket.emit('move_object', {
+                    id: selectedObject.userData.serverId,
+                    position: {
+                        x: selectedObject.position.x,
+                        y: selectedObject.position.y,
+                        z: selectedObject.position.z
+                    }
+                });
+            }
+        });
 
         // アニメーションループ
         function animate() {
             requestAnimationFrame(animate);
-            cube.rotation.x += 0.01;
-            cube.rotation.y += 0.01;
+            controls.update();
             renderer.render(scene, camera);
         }
         animate();
+        // 例: sample.glb を (0,0,0) に配置する場合
+        // loadGLBModel('test_pc.glb', 0, 0, 0);
     </script>
 </body>
 </html>
