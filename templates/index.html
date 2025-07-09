@@ -3,117 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <title>MPCad</title>
-    <style>
-        #mode-bar {
-            position: fixed;
-            top: 48px;
-            left: 0;
-            width: 56px;
-            background: #333;
-            color: #fff;
-            display: flex;
-            flex-direction: column;
-            align-items: stretch;
-            gap: 8px;
-            z-index: 30;
-            padding: 8px 0;
-            border-radius: 0 8px 8px 0;
-        }
-        #mode-bar button {
-            background: #555;
-            color: #fff;
-            border: none;
-            padding: 16px 0;
-            border-radius: 0 8px 8px 0;
-            cursor: pointer;
-            font-size: 16px;
-            margin: 0 4px;
-        }
-        #mode-bar button.active {
-            background: #ff9800;
-            color: #222;
-        }
-        #menu-bar {
-            width: 100vw;
-            background: #222;
-            color: #fff;
-            padding: 8px 0;
-            display: flex;
-            justify-content: flex-start;
-            align-items: center;
-            gap: 16px;
-            position: fixed;
-            top: 0;
-            left: 0;
-            z-index: 20;
-        }
-        .dropdown {
-            position: relative;
-            display: inline-block;
-        }
-        .dropdown-btn {
-            margin-left: 50px;
-            background: #444;
-            color: #fff;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        .dropdown-btn:hover, .dropdown.open .dropdown-btn {
-            background: #666;
-        }
-        .dropdown-content {
-            margin-left: 50px;
-            display: none;
-            position: absolute;
-            left: 0;
-            top: 100%;
-            background: #222;
-            min-width: 120px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-            border-radius: 0 0 8px 8px;
-            z-index: 100;
-            flex-direction: column;
-        }
-        .dropdown.open .dropdown-content,
-        .dropdown:hover .dropdown-content {
-            display: flex;
-        }
-        .dropdown-content button {
-            background: #444;
-            color: #fff;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0;
-            cursor: pointer;
-            font-size: 16px;
-            text-align: left;
-        }
-        .dropdown-content button:hover {
-            background: #666;
-        }
-        /* カスタムアラート */
-        #custom-alert {
-            position: fixed;
-            background: rgba(50,0,0,0.9);
-            color: #fff;
-            padding: 6px 16px;
-            border-radius: 6px;
-            font-size: 14px;
-            pointer-events: none;
-            z-index: 10000;
-            display: none;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-            transition: opacity 0.2s;
-        }
-        body { margin: 0; }
-        canvas { display: block; }
-    </style>
+    <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
     <div id="menu-bar">
+        <p>MPCad</p>
         <div class="dropdown" id="add-dropdown">
             <button class="dropdown-btn">追加</button>
             <div class="dropdown-content">
@@ -125,10 +19,19 @@
         <!-- 他のメニューボタンがあればここに -->
     </div>
     <div id="mode-bar">
-        <button id="mode-move" class="active">移動</button>
-        <button id="mode-edit">編集</button>
-        <button id="mode-scale">寸法</button>
-        <button id="mode-rotate">回転</button>
+        <button id="mode-move" class="active mode-btn" style="position:relative;">移動</button>
+        <button id="mode-edit" class="mode-btn">編集</button>
+        <button id="mode-scale" class="mode-btn">寸法</button>
+        <button id="mode-rotate" class="mode-btn">回転</button>
+        <div id="move-coord-ui" style="display:none;">
+            <label style="color:#fff;font-size:12px;">X</label>
+            <input id="move-x" type="number" step="0.1" style="width:48px; font-size:12px; margin-right:2px;">
+            <label style="color:#fff;font-size:12px;">Y</label>
+            <input id="move-y" type="number" step="0.1" style="width:48px; font-size:12px; margin-right:2px;">
+            <label style="color:#fff;font-size:12px;">Z</label>
+            <input id="move-z" type="number" step="0.1" style="width:48px; font-size:12px; margin-right:2px;">
+            <button id="move-apply" style="font-size:12px; padding:2px 8px; border-radius:4px; background:#ff9800; color:#222; border:none; cursor:pointer;">移動</button>
+        </div>
     </div>
     <div id="custom-alert"></div>
     <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
@@ -293,10 +196,29 @@
         document.getElementById('mode-rotate').onclick = () => setMode('rotate');
         function setMode(newMode) {
             mode = newMode;
-            document.getElementById('mode-move').classList.toggle('active', mode === 'move');
-            document.getElementById('mode-edit').classList.toggle('active', mode === 'edit');
-            document.getElementById('mode-scale').classList.toggle('active', mode === 'scale');
-            document.getElementById('mode-rotate').classList.toggle('active', mode === 'rotate');
+            // すべてのモードボタンのactiveを外し、幅を48pxに
+            document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
+            // 現在のモードボタンのみactive&幅56px
+            if (mode === 'move') document.getElementById('mode-move').classList.add('active');
+            if (mode === 'edit') document.getElementById('mode-edit').classList.add('active');
+            if (mode === 'scale') document.getElementById('mode-scale').classList.add('active');
+            if (mode === 'rotate') document.getElementById('mode-rotate').classList.add('active');
+            // 移動UIの表示切替
+            const moveUI = document.getElementById('move-coord-ui');
+            if (mode === 'move' && selectedObject) {
+                // 移動ボタンの位置を取得してUIを配置
+                const moveBtn = document.getElementById('mode-move');
+                const bar = document.getElementById('mode-bar');
+                const btnRect = moveBtn.getBoundingClientRect();
+                const barRect = bar.getBoundingClientRect();
+                // left: モードバーの右端, top: ボタンの上端
+                moveUI.style.left = (barRect.right - barRect.left) + 'px';
+                moveUI.style.top = (moveBtn.offsetTop) + 'px';
+                moveUI.style.display = '';
+                updateMoveCoordUI();
+            } else {
+                document.getElementById('move-coord-ui').style.display = 'none';
+            }
             if (mode === 'move') {
                 if (vertexHandles.length > 0) removeVertexHandles();
                 transformControls.setMode('translate');
@@ -480,6 +402,21 @@
             }
             selectedObjects = objs ? [...objs] : [];
             selectedObject = selectedObjects.length > 0 ? selectedObjects[0] : null;
+            // --- 移動UIの表示制御 ---
+            const moveUI = document.getElementById('move-coord-ui');
+            if (mode === 'move' && selectedObject) {
+                // 移動ボタンの位置を取得してUIを配置
+                const moveBtn = document.getElementById('mode-move');
+                const bar = document.getElementById('mode-bar');
+                const btnRect = moveBtn.getBoundingClientRect();
+                const barRect = bar.getBoundingClientRect();
+                moveUI.style.left = (barRect.right - barRect.left) + 'px';
+                moveUI.style.top = (moveBtn.offsetTop) + 'px';
+                moveUI.style.display = '';
+                updateMoveCoordUI();
+            } else {
+                moveUI.style.display = 'none';
+            }
             if (selectedObjects.length > 0) {
                 selectedObjects.forEach(obj => {
                     // サーバーに選択リクエスト
@@ -522,6 +459,54 @@
                 }
             }
         }
+        // --- 移動UIの値を現在の座標で更新する関数 ---
+        function updateMoveCoordUI() {
+            if (!selectedObject) return;
+            document.getElementById('move-x').value = selectedObject.position.x.toFixed(3);
+            document.getElementById('move-y').value = selectedObject.position.y.toFixed(3);
+            document.getElementById('move-z').value = selectedObject.position.z.toFixed(3);
+        }
+        // --- 移動UIのイベント ---
+        document.getElementById('move-apply').onclick = function() {
+            if (!selectedObject) return;
+            const x = parseFloat(document.getElementById('move-x').value);
+            const y = parseFloat(document.getElementById('move-y').value);
+            const z = parseFloat(document.getElementById('move-z').value);
+            if (isNaN(x) || isNaN(y) || isNaN(z)) return;
+            // undo記録
+            pushUndo({
+                type: 'move',
+                objs: [...selectedObjects],
+                prevPositions: selectedObjects.map(obj => obj.position.clone())
+            });
+            selectedObjects.forEach(obj => {
+                obj.position.set(x, y, z);
+                if (obj.userData.serverId) {
+                    socket.emit('move_object', {
+                        id: obj.userData.serverId,
+                        position: { x, y, z }
+                    });
+                }
+            });
+            updateMoveCoordUI();
+        };
+        // --- TransformControlsやサーバー同期で座標が変わったらUIも更新 ---
+        // TransformControlsのobjectChangeイベントでUI更新
+        transformControls.addEventListener('objectChange', function () {
+            if (mode === 'move' && selectedObject) {
+                updateMoveCoordUI();
+            }
+        });
+        // サーバーからのmove_objectイベントでUI更新
+        socket.on('move_object', (data) => {
+            const obj = idToObject[data.id];
+            if (obj) {
+                obj.position.set(data.position.x, data.position.y, data.position.z);
+                if (mode === 'move' && selectedObject === obj) {
+                    updateMoveCoordUI();
+                }
+            }
+        });
 
         // 立方体を設置する関数
         function addCube() {
@@ -617,6 +602,10 @@
                         });
                     }
                 });
+                // --- 移動UIの値も更新 ---
+                if (mode === 'move' && selectedObject) {
+                    updateMoveCoordUI();
+                }
             } else if (action.type === 'rotate') {
                 action.objs.forEach((obj, i) => {
                     obj.rotation.copy(action.prevRotations[i]);
