@@ -10,14 +10,23 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 @socketio.on('edit_vertex')
 def handle_edit_vertex(data):
     obj_id = data['id']
-    idx = data['vertex_index']
+    # vertex_index(旧)またはvertex_indices(新)どちらも対応
+    indices = data.get('vertex_indices')
     position = data['position']
-    # サーバー側では頂点情報は保持しないが、全クライアントへブロードキャスト
-    emit('edit_vertex', {
-        'id': obj_id,
-        'vertex_index': idx,
-        'position': position
-    }, broadcast=True)
+    if indices is not None:
+        emit('edit_vertex', {
+            'id': obj_id,
+            'vertex_indices': indices,
+            'position': position
+        }, broadcast=True, include_self=False)
+    else:
+        # 旧バージョン互換
+        idx = data.get('vertex_index')
+        emit('edit_vertex', {
+            'id': obj_id,
+            'vertex_index': idx,
+            'position': position
+        }, broadcast=True, include_self=False)
     
 # オブジェクト情報を管理（id, type, position など）
 

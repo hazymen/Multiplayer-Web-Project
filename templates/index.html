@@ -2,33 +2,97 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Three.js サンプル</title>
+    <title>MPCad</title>
     <style>
         #mode-bar {
-            width: 100vw;
+            position: fixed;
+            top: 48px;
+            left: 0;
+            width: 56px;
             background: #333;
             color: #fff;
-            padding: 8px 0 0 0;
             display: flex;
-            justify-content: center;
-            gap: 16px;
-            position: fixed;
-            top: 0;
-            left: 0;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 8px;
             z-index: 30;
+            padding: 8px 0;
+            border-radius: 0 8px 8px 0;
         }
         #mode-bar button {
             background: #555;
             color: #fff;
             border: none;
-            padding: 8px 16px;
-            border-radius: 4px 4px 0 0;
+            padding: 16px 0;
+            border-radius: 0 8px 8px 0;
             cursor: pointer;
             font-size: 16px;
+            margin: 0 4px;
         }
         #mode-bar button.active {
             background: #ff9800;
             color: #222;
+        }
+        #menu-bar {
+            width: 100vw;
+            background: #222;
+            color: #fff;
+            padding: 8px 0;
+            display: flex;
+            justify-content: flex-start;
+            align-items: center;
+            gap: 16px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 20;
+        }
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        .dropdown-btn {
+            margin-left: 50px;
+            background: #444;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .dropdown-btn:hover, .dropdown.open .dropdown-btn {
+            background: #666;
+        }
+        .dropdown-content {
+            margin-left: 50px;
+            display: none;
+            position: absolute;
+            left: 0;
+            top: 100%;
+            background: #222;
+            min-width: 120px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            border-radius: 0 0 8px 8px;
+            z-index: 100;
+            flex-direction: column;
+        }
+        .dropdown.open .dropdown-content,
+        .dropdown:hover .dropdown-content {
+            display: flex;
+        }
+        .dropdown-content button {
+            background: #444;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0;
+            cursor: pointer;
+            font-size: 16px;
+            text-align: left;
+        }
+        .dropdown-content button:hover {
+            background: #666;
         }
         /* カスタムアラート */
         #custom-alert {
@@ -46,44 +110,27 @@
         }
         body { margin: 0; }
         canvas { display: block; }
-        #menu-bar {
-            width: 100vw;
-            background: #222;
-            color: #fff;
-            padding: 8px 0;
-            display: flex;
-            justify-content: center;
-            gap: 16px;
-            position: fixed;
-            top: 48px;
-            left: 0;
-            z-index: 20;
-        }
-        #menu-bar button {
-            background: #444;
-            color: #fff;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        #menu-bar button:hover {
-            background: #666;
-        }
     </style>
 </head>
 <body>
+    <div id="menu-bar">
+        <div class="dropdown" id="add-dropdown">
+            <button class="dropdown-btn">追加</button>
+            <div class="dropdown-content">
+                <button id="add-cube">立方体</button>
+                <button id="add-sphere">球体</button>
+                <button id="add-plane">平面</button>
+            </div>
+        </div>
+        <!-- 他のメニューボタンがあればここに -->
+    </div>
     <div id="mode-bar">
-        <button id="mode-object" class="active">オブジェクト</button>
+        <button id="mode-move" class="active">移動</button>
         <button id="mode-edit">編集</button>
+        <button id="mode-scale">寸法</button>
+        <button id="mode-rotate">回転</button>
     </div>
     <div id="custom-alert"></div>
-    <div id="menu-bar">
-        <button id="add-cube">立方体</button>
-        <button id="add-sphere">球体</button>
-        <button id="add-plane">平面</button>
-    </div>
     <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
     <script src="https://unpkg.com/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
     <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
@@ -95,13 +142,13 @@
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
         const renderer = new THREE.WebGLRenderer();
         renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.domElement.style.marginTop = '96px'; // モードバー+メニューバー分の余白
+        renderer.domElement.style.marginTop = '48px'; // モードバー+メニューバー分の余白
         document.body.appendChild(renderer.domElement);
         camera.position.z = 5;
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
-        controls.screenSpacePanning = false;
+        controls.screenSpacePanning = true;
         controls.minDistance = 1;
         controls.maxDistance = 1000;
         const transformControls = new THREE.TransformControls(camera, renderer.domElement);
@@ -162,9 +209,10 @@
             vertexGroups = [];
         }
 
-        // 頂点ハンドルのドラッグ処理（グループ対応）
+        // 頂点ハンドルのドラッグ処理（グループ対応・undo記録）
         let draggingHandle = null;
         let dragOffset = new THREE.Vector3();
+        let dragPrevPositions = null;
         renderer.domElement.addEventListener('pointerdown', (event) => {
             if (mode !== 'edit') return;
             const rect = renderer.domElement.getBoundingClientRect();
@@ -176,6 +224,13 @@
                 draggingHandle = intersects[0].object;
                 dragOffset.copy(draggingHandle.position);
                 controls.enabled = false; // ドラッグ中は視点操作を無効化
+                // --- undo記録 ---
+                const mesh = draggingHandle.userData.parentMesh;
+                const indices = draggingHandle.userData.vertexIndices;
+                const posAttr = mesh.geometry.attributes.position;
+                dragPrevPositions = indices.map(idx => {
+                    return new THREE.Vector3().fromBufferAttribute(posAttr, idx);
+                });
             }
         });
         renderer.domElement.addEventListener('pointermove', (event) => {
@@ -213,25 +268,50 @@
         });
         renderer.domElement.addEventListener('pointerup', () => {
             if (draggingHandle) {
+                // --- undo記録 ---
+                if (dragPrevPositions) {
+                    const mesh = draggingHandle.userData.parentMesh;
+                    const indices = draggingHandle.userData.vertexIndices;
+                    pushUndo({
+                        type: 'vertex',
+                        mesh: mesh,
+                        indices: [...indices],
+                        prev: dragPrevPositions.map(v => v.clone())
+                    });
+                }
                 draggingHandle = null;
+                dragPrevPositions = null;
                 controls.enabled = true; // ドラッグ終了で視点操作を有効化
             }
         });
 
         // --- モード管理 ---
-        let mode = 'object'; // 'object' or 'edit'
-        document.getElementById('mode-object').onclick = () => setMode('object');
+        let mode = 'move'; // 'move', 'edit', 'scale', 'rotate'
+        document.getElementById('mode-move').onclick = () => setMode('move');
         document.getElementById('mode-edit').onclick = () => setMode('edit');
+        document.getElementById('mode-scale').onclick = () => setMode('scale');
+        document.getElementById('mode-rotate').onclick = () => setMode('rotate');
         function setMode(newMode) {
             mode = newMode;
-            document.getElementById('mode-object').classList.toggle('active', mode === 'object');
+            document.getElementById('mode-move').classList.toggle('active', mode === 'move');
             document.getElementById('mode-edit').classList.toggle('active', mode === 'edit');
-            if (mode === 'object') {
+            document.getElementById('mode-scale').classList.toggle('active', mode === 'scale');
+            document.getElementById('mode-rotate').classList.toggle('active', mode === 'rotate');
+            if (mode === 'move') {
                 if (vertexHandles.length > 0) removeVertexHandles();
+                transformControls.setMode('translate');
                 transformControls.visible = !!selectedObject;
             } else if (mode === 'edit') {
                 transformControls.visible = false;
                 if (selectedObject) showVertexHandles(selectedObject);
+            } else if (mode === 'scale') {
+                if (vertexHandles.length > 0) removeVertexHandles();
+                transformControls.setMode('scale');
+                transformControls.visible = !!selectedObject;
+            } else if (mode === 'rotate') {
+                if (vertexHandles.length > 0) removeVertexHandles();
+                transformControls.setMode('rotate');
+                transformControls.visible = !!selectedObject;
             }
         }
         // カスタムアラート表示関数
@@ -337,7 +417,8 @@
 
         // 選択可能オブジェクト管理
         const selectableObjects = [];
-        let selectedObject = null;
+        let selectedObjects = [];
+        let selectedObject = null; // 代表（TransformControls用）
 
         // --- 選択状態の同期 ---
         // 選択中のオブジェクトid→選択ユーザーsid
@@ -371,52 +452,73 @@
             }
         });
 
-        // 選択状態の見た目を変更する関数
-        function setSelectedObject(obj) {
+        // 選択状態の見た目を変更する関数（複数対応）
+        function setSelectedObjects(objs) {
             // 既存の選択解除処理
-            if (selectedObject) {
-                if (selectedObject.material && selectedObject.userData.originalColor) {
-                    selectedObject.material.color.set(selectedObject.userData.originalColor);
-                }
-                if (selectedObject.children && selectedObject.children.length > 0) {
-                    selectedObject.traverse(child => {
-                        if (child.material && child.userData.originalColor) {
-                            child.material.color.set(child.userData.originalColor);
-                        }
-                    });
-                }
-                transformControls.detach();
-                transformControls.visible = false;
-                if (vertexHandles.length > 0) removeVertexHandles();
-                // サーバーに選択解除を通知
-                if (selectedObject.userData.serverId) {
-                    socket.emit('deselect_object', {id: selectedObject.userData.serverId});
-                }
+            if (selectedObjects && selectedObjects.length > 0) {
+                selectedObjects.forEach(obj => {
+                    if (obj.material && obj.userData.originalColor !== undefined) {
+                        obj.material.color.set(obj.userData.originalColor);
+                        delete obj.userData.originalColor;
+                    }
+                    if (obj.children && obj.children.length > 0) {
+                        obj.traverse(child => {
+                            if (child.material && child.userData.originalColor !== undefined) {
+                                child.material.color.set(child.userData.originalColor);
+                                delete child.userData.originalColor;
+                            }
+                        });
+                    }
+                    transformControls.detach();
+                    transformControls.visible = false;
+                    if (vertexHandles.length > 0) removeVertexHandles();
+                    // サーバーに選択解除を通知
+                    if (obj.userData.serverId) {
+                        socket.emit('deselect_object', {id: obj.userData.serverId});
+                    }
+                });
             }
-            selectedObject = obj;
-            if (selectedObject) {
-                // サーバーに選択リクエスト
-                if (selectedObject.userData.serverId) {
-                    socket.emit('select_object', {id: selectedObject.userData.serverId});
-                }
-                // 選択: 色を黄色に
-                if (selectedObject.material) {
-                    selectedObject.userData.originalColor = selectedObject.material.color.getHex();
-                    selectedObject.material.color.set(0xffff00);
-                }
-                if (selectedObject.children && selectedObject.children.length > 0) {
-                    selectedObject.traverse(child => {
-                        if (child.material) {
-                            child.userData.originalColor = child.material.color.getHex();
-                            child.material.color.set(0xffff00);
+            selectedObjects = objs ? [...objs] : [];
+            selectedObject = selectedObjects.length > 0 ? selectedObjects[0] : null;
+            if (selectedObjects.length > 0) {
+                selectedObjects.forEach(obj => {
+                    // サーバーに選択リクエスト
+                    if (obj.userData.serverId) {
+                        socket.emit('select_object', {id: obj.userData.serverId});
+                    }
+                    // 選択: 色を黄色に
+                    if (obj.material) {
+                        if (obj.userData.originalColor === undefined) {
+                            obj.userData.originalColor = obj.material.color.getHex();
                         }
-                    });
-                }
-                if (mode === 'object') {
+                        obj.material.color.set(0xffff00);
+                    }
+                    if (obj.children && obj.children.length > 0) {
+                        obj.traverse(child => {
+                            if (child.material) {
+                                if (child.userData.originalColor === undefined) {
+                                    child.userData.originalColor = child.material.color.getHex();
+                                }
+                                child.material.color.set(0xffff00);
+                            }
+                        });
+                    }
+                });
+                // --- 修正: 移動モード時は必ずTransformControlsを表示 ---
+                if (mode === 'move' || mode === 'translate') {
                     transformControls.attach(selectedObject);
                     transformControls.visible = true;
                 } else if (mode === 'edit') {
                     showVertexHandles(selectedObject);
+                    transformControls.visible = false;
+                } else if (mode === 'scale') {
+                    transformControls.attach(selectedObject);
+                    transformControls.setMode('scale');
+                    transformControls.visible = true;
+                } else if (mode === 'rotate') {
+                    transformControls.attach(selectedObject);
+                    transformControls.setMode('rotate');
+                    transformControls.visible = true;
                 }
             }
         }
@@ -455,6 +557,7 @@
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         renderer.domElement.addEventListener('pointerdown', (event) => {
+            // TransformControlsのドラッグ中は絶対に選択処理をしない
             if (transformControls.dragging) return;
             const rect = renderer.domElement.getBoundingClientRect();
             mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -468,24 +571,257 @@
                     showCustomAlert('他のユーザーが選択中です', event.clientX, event.clientY);
                     return;
                 }
-                setSelectedObject(obj);
+                if (event.shiftKey) {
+                    // Shift+クリック: 追加/解除
+                    let newSelected = [...selectedObjects];
+                    const idx = newSelected.indexOf(obj);
+                    if (idx >= 0) {
+                        newSelected.splice(idx, 1);
+                    } else {
+                        newSelected.push(obj);
+                    }
+                    setSelectedObjects(newSelected);
+                } else {
+                    setSelectedObjects([obj]);
+                }
             } else {
-                setSelectedObject(null);
+                setSelectedObjects([]);
             }
         });
 
-        // TransformControlsで移動したらサーバーに通知
-        transformControls.addEventListener('objectChange', function () {
-            if (selectedObject && selectedObject.userData.serverId) {
-                socket.emit('move_object', {
-                    id: selectedObject.userData.serverId,
-                    position: {
-                        x: selectedObject.position.x,
-                        y: selectedObject.position.y,
-                        z: selectedObject.position.z
+        // --- Undoスタック ---
+        const undoStack = [];
+        function pushUndo(action) {
+            undoStack.push(action);
+            if (undoStack.length > 100) undoStack.shift(); // 履歴上限
+        }
+        function popUndo() {
+            return undoStack.pop();
+        }
+        // --- Undo実行 ---
+        function performUndo() {
+            const action = popUndo();
+            if (!action) return;
+            if (action.type === 'move') {
+                // 複数移動対応
+                action.objs.forEach((obj, i) => {
+                    obj.position.copy(action.prevPositions[i]);
+                    if (obj.userData.serverId) {
+                        socket.emit('move_object', {
+                            id: obj.userData.serverId,
+                            position: {
+                                x: obj.position.x,
+                                y: obj.position.y,
+                                z: obj.position.z
+                            }
+                        });
                     }
                 });
+            } else if (action.type === 'rotate') {
+                action.objs.forEach((obj, i) => {
+                    obj.rotation.copy(action.prevRotations[i]);
+                    if (obj.userData.serverId) {
+                        socket.emit('rotate_object', {
+                            id: obj.userData.serverId,
+                            rotation: {
+                                x: obj.rotation.x,
+                                y: obj.rotation.y,
+                                z: obj.rotation.z
+                            }
+                        });
+                    }
+                });
+            } else if (action.type === 'scale') {
+                action.objs.forEach((obj, i) => {
+                    obj.scale.copy(action.prevScales[i]);
+                    if (obj.userData.serverId) {
+                        socket.emit('scale_object', {
+                            id: obj.userData.serverId,
+                            scale: {
+                                x: obj.scale.x,
+                                y: obj.scale.y,
+                                z: obj.scale.z
+                            }
+                        });
+                    }
+                });
+            } else if (action.type === 'vertex') {
+                // 頂点編集undo
+                const mesh = action.mesh;
+                action.indices.forEach((idx, i) => {
+                    mesh.geometry.attributes.position.setXYZ(idx, action.prev[i].x, action.prev[i].y, action.prev[i].z);
+                });
+                mesh.geometry.attributes.position.needsUpdate = true;
+                if (mesh.userData.serverId) {
+                    socket.emit('edit_vertex', {
+                        id: mesh.userData.serverId,
+                        vertex_indices: action.indices,
+                        position: action.prev[0] // 代表値（全て同じ座標）
+                    });
+                }
             }
+        }
+        // --- Ctrl+ZでUndo ---
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                performUndo();
+                e.preventDefault();
+            }
+        });
+
+        // TransformControlsで移動・回転・スケールしたらサーバーに通知（undo記録もmodeごとに）
+        let lastPosition = null;
+        let dragStartPositions = null;
+        let dragStartRotations = null;
+        let dragStartScales = null;
+        transformControls.addEventListener('mouseDown', function () {
+            if (selectedObject) {
+                lastPosition = selectedObject.position.clone();
+                dragStartPositions = selectedObjects.map(obj => obj.position.clone());
+                dragStartRotations = selectedObjects.map(obj => obj.rotation.clone());
+                dragStartScales = selectedObjects.map(obj => obj.scale.clone());
+            }
+        });
+        transformControls.addEventListener('objectChange', function () {
+            if (selectedObject && lastPosition) {
+                const delta = new THREE.Vector3().subVectors(selectedObject.position, lastPosition);
+                // 代表以外も同じだけ移動/回転/スケール
+                for (let i = 1; i < selectedObjects.length; i++) {
+                    const obj = selectedObjects[i];
+                    if (mode === 'move' || mode === 'translate') {
+                        obj.position.add(delta);
+                        if (obj.userData.serverId) {
+                            socket.emit('move_object', {
+                                id: obj.userData.serverId,
+                                position: {
+                                    x: obj.position.x,
+                                    y: obj.position.y,
+                                    z: obj.position.z
+                                }
+                            });
+                        }
+                    } else if (mode === 'rotate') {
+                        obj.rotation.copy(selectedObject.rotation);
+                        if (obj.userData.serverId) {
+                            socket.emit('rotate_object', {
+                                id: obj.userData.serverId,
+                                rotation: {
+                                    x: obj.rotation.x,
+                                    y: obj.rotation.y,
+                                    z: obj.rotation.z
+                                }
+                            });
+                        }
+                    } else if (mode === 'scale') {
+                        obj.scale.copy(selectedObject.scale);
+                        if (obj.userData.serverId) {
+                            socket.emit('scale_object', {
+                                id: obj.userData.serverId,
+                                scale: {
+                                    x: obj.scale.x,
+                                    y: obj.scale.y,
+                                    z: obj.scale.z
+                                }
+                            });
+                        }
+                    }
+                }
+                // 代表もサーバー通知
+                if (mode === 'move' || mode === 'translate') {
+                    if (selectedObject.userData.serverId) {
+                        socket.emit('move_object', {
+                            id: selectedObject.userData.serverId,
+                            position: {
+                                x: selectedObject.position.x,
+                                y: selectedObject.position.y,
+                                z: selectedObject.position.z
+                            }
+                        });
+                    }
+                    lastPosition = selectedObject.position.clone();
+                } else if (mode === 'rotate') {
+                    if (selectedObject.userData.serverId) {
+                        socket.emit('rotate_object', {
+                            id: selectedObject.userData.serverId,
+                            rotation: {
+                                x: selectedObject.rotation.x,
+                                y: selectedObject.rotation.y,
+                                z: selectedObject.rotation.z
+                            }
+                        });
+                    }
+                } else if (mode === 'scale') {
+                    if (selectedObject.userData.serverId) {
+                        socket.emit('scale_object', {
+                            id: selectedObject.userData.serverId,
+                            scale: {
+                                x: selectedObject.scale.x,
+                                y: selectedObject.scale.y,
+                                z: selectedObject.scale.z
+                            }
+                        });
+                    }
+                }
+            }
+        });
+        transformControls.addEventListener('mouseUp', function () {
+            if (selectedObjects.length > 0) {
+                // 終了時の値
+                const endPositions = selectedObjects.map(obj => obj.position.clone());
+                const endRotations = selectedObjects.map(obj => obj.rotation.clone());
+                const endScales = selectedObjects.map(obj => obj.scale.clone());
+                // どれか1つでも動いていれば履歴push
+                if (mode === 'move' || mode === 'translate') {
+                    let moved = false;
+                    for (let i = 0; i < dragStartPositions.length; i++) {
+                        if (!dragStartPositions[i].equals(endPositions[i])) {
+                            moved = true;
+                            break;
+                        }
+                    }
+                    if (moved) {
+                        pushUndo({
+                            type: 'move',
+                            objs: [...selectedObjects],
+                            prevPositions: dragStartPositions.map(p => p.clone())
+                        });
+                    }
+                } else if (mode === 'rotate') {
+                    let rotated = false;
+                    for (let i = 0; i < dragStartRotations.length; i++) {
+                        if (!dragStartRotations[i].equals(endRotations[i])) {
+                            rotated = true;
+                            break;
+                        }
+                    }
+                    if (rotated) {
+                        pushUndo({
+                            type: 'rotate',
+                            objs: [...selectedObjects],
+                            prevRotations: dragStartRotations.map(r => r.clone())
+                        });
+                    }
+                } else if (mode === 'scale') {
+                    let scaled = false;
+                    for (let i = 0; i < dragStartScales.length; i++) {
+                        if (!dragStartScales[i].equals(endScales[i])) {
+                            scaled = true;
+                            break;
+                        }
+                    }
+                    if (scaled) {
+                        pushUndo({
+                            type: 'scale',
+                            objs: [...selectedObjects],
+                            prevScales: dragStartScales.map(s => s.clone())
+                        });
+                    }
+                }
+            }
+            lastPosition = null;
+            dragStartPositions = null;
+            dragStartRotations = null;
+            dragStartScales = null;
         });
 
         // アニメーションループ
@@ -496,7 +832,7 @@
         }
         animate();
         // 例: sample.glb を (0,0,0) に配置する場合
-        // loadGLBModel('test_pc.glb', 0, 0, 0);
+        loadGLBModel('test_pc.glb', 0, 0, 0);
     </script>
 </body>
 </html>
