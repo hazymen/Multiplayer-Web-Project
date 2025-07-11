@@ -29,6 +29,17 @@
     background: #ff9800;
     color: #222;
 }
+#mode-bar button.toggle-btn {
+    border: 2px solid #ff9800;
+    background: #444;
+    color: #ff9800;
+    font-weight: bold;
+}
+#mode-bar button.toggle-btn.active {
+    background: #ff9800;
+    color: #222;
+    border: 2px solid #ff9800;
+}
 #menu-bar {
     width: 100vw;
     height: 48px;

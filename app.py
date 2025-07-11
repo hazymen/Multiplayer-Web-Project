@@ -7,26 +7,29 @@ import os
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-@socketio.on('edit_vertex')
-def handle_edit_vertex(data):
+# オブジェクト削除イベント
+@socketio.on('delete_object')
+def handle_delete_object(data):
     obj_id = data['id']
-    # vertex_index(旧)またはvertex_indices(新)どちらも対応
-    indices = data.get('vertex_indices')
-    position = data['position']
-    if indices is not None:
-        emit('edit_vertex', {
-            'id': obj_id,
-            'vertex_indices': indices,
-            'position': position
-        }, broadcast=True, include_self=False)
-    else:
-        # 旧バージョン互換
-        idx = data.get('vertex_index')
-        emit('edit_vertex', {
-            'id': obj_id,
-            'vertex_index': idx,
-            'position': position
-        }, broadcast=True, include_self=False)
+    if obj_id in objects:
+        del objects[obj_id]
+        # 選択状態も解除
+        if obj_id in object_selected_by:
+            del object_selected_by[obj_id]
+        emit('object_deleted', {'id': obj_id}, broadcast=True)
+
+
+@socketio.on('edit_face')
+def handle_edit_face(data):
+    obj_id = data['id']
+    indices = data.get('face_indices')
+    delta = data.get('delta')
+    emit('edit_face', {
+        'id': obj_id,
+        'face_indices': indices,
+        'delta': delta,
+        'childMeshIndex': data.get('childMeshIndex')
+    }, broadcast=True, include_self=False)
     
 # オブジェクト情報を管理（id, type, position など）
 
@@ -79,18 +82,55 @@ def handle_add_object(data):
         'id': object_id_counter,
         'type': data['type'],
         'position': data['position'],
-        'color': data.get('color', None)
     }
+    # GLBモデルの場合はmodelName, rotation, scaleも保存
+    if data['type'] == 'glb':
+        obj['modelName'] = data.get('modelName')
+        if 'rotation' in data:
+            obj['rotation'] = data['rotation']
+        if 'scale' in data:
+            obj['scale'] = data['scale']
+    else:
+        obj['color'] = data.get('color', None)
+        if 'rotation' in data:
+            obj['rotation'] = data['rotation']
+        if 'scale' in data:
+            obj['scale'] = data['scale']
     objects[object_id_counter] = obj
     object_id_counter += 1
     emit('add_object', obj, broadcast=True)
 
+
+# --- 追加: 回転・スケール・全体同期イベント ---
 @socketio.on('move_object')
 def handle_move_object(data):
     obj_id = data['id']
     if obj_id in objects:
         objects[obj_id]['position'] = data['position']
-        emit('move_object', data, broadcast=True)
+        # 既存のrotation/scaleも送る
+        emit('move_object', {
+            **objects[obj_id],
+        }, broadcast=True, include_self=False)
+
+@socketio.on('rotate_object')
+def handle_rotate_object(data):
+    obj_id = data['id']
+    rotation = data['rotation']
+    if obj_id in objects:
+        objects[obj_id]['rotation'] = rotation
+        emit('rotate_object', {
+            **objects[obj_id],
+        }, broadcast=True, include_self=False)
+
+@socketio.on('scale_object')
+def handle_scale_object(data):
+    obj_id = data['id']
+    scale = data['scale']
+    if obj_id in objects:
+        objects[obj_id]['scale'] = scale
+        emit('scale_object', {
+            **objects[obj_id],
+        }, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
     if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
