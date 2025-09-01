@@ -19,6 +19,7 @@
             </div>
         </div>
         <button id="delete-btn" style="margin-left:12px;background:#e53935;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:16px;">削除</button>
+        <button id="mode-switch" style="margin-left:12px;background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:16px;">通常</button>
         
         <!-- 他のメニューボタンがあればここに -->
     </div>
@@ -26,7 +27,6 @@
         <button id="mode-move" class="active mode-btn" style="position:relative;">移動</button>
         <button id="mode-scale" class="mode-btn">寸法</button>
         <button id="mode-rotate" class="mode-btn">回転</button>
-        <button id="mode-draw" class="mode-btn toggle-btn">作図</button>
         <div id="move-coord-ui" style="display:none;">
             <label style="color:#fff;font-size:12px;">X</label>
             <input id="move-x" type="number" step="0.1" style="width:48px; font-size:12px; margin-right:2px;">
@@ -254,7 +254,7 @@
         document.getElementById('mode-move').onclick = () => setOpMode('move');
         document.getElementById('mode-scale').onclick = () => setOpMode('scale');
         document.getElementById('mode-rotate').onclick = () => setOpMode('rotate');
-        document.getElementById('mode-draw').onclick = () => setDrawMode(!drawMode);
+        document.getElementById('mode-switch').onclick = () => setDrawMode(!drawMode);
 
         function setDrawMode(on) {
             if (drawMode === on) return;
@@ -262,7 +262,12 @@
             // pointerイベントの状態をリセット
             transformControls.detach();
             controls.enabled = true;
+            
+            // ボタンのテキストと色を更新
+            const switchBtn = document.getElementById('mode-switch');
             if (drawMode) {
+                switchBtn.textContent = '作図';
+                switchBtn.style.background = '#ff9800';
                 savedCameraPosition = camera.position.clone();
                 savedCameraUp = camera.up.clone();
                 savedControlsTarget = controls.target.clone();
@@ -274,6 +279,8 @@
                 controls.enablePan = true;    // 右ドラッグ平行移動OK
                 controls.enableZoom = true;   // ホイールズームOK
             } else {
+                switchBtn.textContent = '通常';
+                switchBtn.style.background = '#2196f3';
                 if (savedCameraPosition && savedCameraUp && savedControlsTarget) {
                     camera.position.copy(savedCameraPosition);
                     camera.up.copy(savedCameraUp);
@@ -306,8 +313,6 @@
             if (opMode === 'move') document.getElementById('mode-move').classList.add('active');
             if (opMode === 'scale') document.getElementById('mode-scale').classList.add('active');
             if (opMode === 'rotate') document.getElementById('mode-rotate').classList.add('active');
-            // 作図モードONならdrawボタンにactive
-            if (drawMode) document.getElementById('mode-draw').classList.add('active');
             // 移動UIの表示切替
             const moveUI = document.getElementById('move-coord-ui');
             if (opMode === 'move' && selectedObject) {
