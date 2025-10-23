@@ -1,0 +1,16 @@
+#menu-bar {
+    width: 100vw;
+    height: 48px;
+    background: #333;
+    color: #fff;
+    padding: 0 0 0 8px;
+    display: flex; /* みなさんご存じ「display: flex;」 */
+    justify-content: flex-start; /* justify-contentをflex-startにすると左揃えになる */
+    align-items: center; /* align-itemsをcenterにすると縦方向で中央揃えになる */
+    gap: 16px; /* display:flex;の時の子同士の余白 */
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 101;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12)
+}
