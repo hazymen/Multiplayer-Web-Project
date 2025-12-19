@@ -1,4 +1,3 @@
-        
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -9,6 +8,14 @@
 <body>
     <div id="menu-bar">
         <p>MPCad</p>
+        <div style="display:inline-block;margin-left:24px;">
+            <input id="project-name-input" type="text" placeholder="プロジェクト名" style="width:120px;padding:4px 8px;border-radius:4px;border:1px solid #ccc;font-size:14px;">
+            <button id="save-project-btn" style="background:#43a047;color:#fff;border:none;padding:8px 12px;border-radius:4px;cursor:pointer;font-size:14px;margin-left:4px;">保存</button>
+        </div>
+        <div style="display:inline-block;margin-left:16px;">
+            <select id="project-list-select" style="padding:6px 8px;border-radius:4px;font-size:14px;"></select>
+            <button id="load-project-btn" style="background:#1976d2;color:#fff;border:none;padding:8px 12px;border-radius:4px;cursor:pointer;font-size:14px;margin-left:4px;">読込</button>
+        </div>
         <div class="dropdown" id="add-dropdown">
             <button class="dropdown-btn">追加</button>
             <div class="dropdown-content">
@@ -44,6 +51,7 @@
     <script src="https://unpkg.com/three@0.147.0/examples/js/controls/TransformControls.js"></script>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
+        let objects = {};
         // --- Three.js初期化 ---
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
@@ -375,7 +383,7 @@
                 createObjectFromServer(obj);
             });
         });
-        // サーバーから新規オブジェクト追加を受信
+            // サーバーから新規オブジェクト追加を受信
         socket.on('add_object', (obj) => {
             createObjectFromServer(obj);
         });
@@ -386,6 +394,7 @@
                 if (data.position) obj.position.set(data.position.x, data.position.y, data.position.z);
                 if (data.rotation) obj.rotation.set(data.rotation.x, data.rotation.y, data.rotation.z);
                 if (data.scale) obj.scale.set(data.scale.x, data.scale.y, data.scale.z);
+                updateObjectState(data.id, obj);
             }
         });
         // サーバーから回転イベントを受信
@@ -395,6 +404,7 @@
                 if (data.rotation) obj.rotation.set(data.rotation.x, data.rotation.y, data.rotation.z);
                 if (data.position) obj.position.set(data.position.x, data.position.y, data.position.z);
                 if (data.scale) obj.scale.set(data.scale.x, data.scale.y, data.scale.z);
+                updateObjectState(data.id, obj);
             }
         });
         // サーバーからスケールイベントを受信
@@ -404,6 +414,7 @@
                 if (data.scale) obj.scale.set(data.scale.x, data.scale.y, data.scale.z);
                 if (data.position) obj.position.set(data.position.x, data.position.y, data.position.z);
                 if (data.rotation) obj.rotation.set(data.rotation.x, data.rotation.y, data.rotation.z);
+                updateObjectState(data.id, obj);
             }
         });
         // --- 面編集のリアルタイム同期受信 ---
@@ -443,6 +454,11 @@
         });
         // サーバーから受信したオブジェクトを生成
         function createObjectFromServer(obj) {
+            // 既存IDの重複を避けて正しく復元
+            if (idToObject[obj.id]) {
+                scene.remove(idToObject[obj.id]);
+                delete idToObject[obj.id];
+            }
             let mesh;
             if (obj.type === 'cube') {
                 const geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -478,7 +494,7 @@
                 idToObject[obj.id] = mesh;
                 mesh.userData.serverId = obj.id;
             } else if (obj.type === 'glb' && obj.modelName) {
-                // GLBモデルの場合
+                // GLBモデルの場合（非同期）
                 const loader = new THREE.GLTFLoader();
                 loader.load(
                     `/static/models/${obj.modelName}`,
@@ -491,15 +507,36 @@
                         selectableObjects.push(model);
                         idToObject[obj.id] = model;
                         model.userData.serverId = obj.id;
+                        // GLBもobjectsに保存
+                        objects[obj.id] = {
+                            id: obj.id,
+                            type: obj.type,
+                            position: { x: model.position.x, y: model.position.y, z: model.position.z },
+                            rotation: { x: model.rotation.x, y: model.rotation.y, z: model.rotation.z },
+                            scale: { x: model.scale.x, y: model.scale.y, z: model.scale.z },
+                            color: obj.color || undefined,
+                            modelName: obj.modelName || undefined
+                        };
                     },
                     undefined,
                     function (error) {
                         console.error('GLBモデルの読み込みに失敗:', error);
                     }
                 );
+                return;
             } else {
                 return;
             }
+            // 共通処理：全オブジェクトタイプで位置・回転・寸法・色を保存
+            objects[obj.id] = {
+                id: obj.id,
+                type: obj.type,
+                position: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z },
+                rotation: { x: mesh.rotation.x, y: mesh.rotation.y, z: mesh.rotation.z },
+                scale: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
+                color: obj.color || undefined,
+                modelName: obj.modelName || undefined
+            };
         }
 
         // ...Three.js初期化は上部で1回のみ...
@@ -1020,6 +1057,103 @@
         animate();
         // 例: sample.glb を (0,0,0) に配置する場合
         // loadGLBModel('test_obj.glb', 0, 0, 0);
+
+        // --- プロジェクト保存・読込UI連携 ---
+        async function fetchProjectList() {
+            const res = await fetch('/api/list_projects');
+            const data = await res.json();
+            if (data.success) {
+                const select = document.getElementById('project-list-select');
+                select.innerHTML = '';
+                data.projects.forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name;
+                    select.appendChild(opt);
+                });
+            }
+        }
+
+        document.getElementById('save-project-btn').onclick = async function() {
+            const name = document.getElementById('project-name-input').value.trim();
+            if (!name) {
+                showCustomAlert('プロジェクト名を入力してください', window.innerWidth/2, 60);
+                return;
+            }
+            // サーバーに送るオブジェクト情報を生成
+            // Three.jsの現在の状態から位置・回転・寸法を取得
+            const objectsToSave = {};
+            for (const id in idToObject) {
+                const mesh = idToObject[id];
+                if (mesh && objects[id]) {
+                    // 現在のThree.jsの位置・回転・寸法を反映
+                    objects[id].position = { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z };
+                    objects[id].rotation = { x: mesh.rotation.x, y: mesh.rotation.y, z: mesh.rotation.z };
+                    objects[id].scale = { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z };
+                }
+                objectsToSave[id] = objects[id];
+            }
+            const res = await fetch('/api/save_project', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, objects: objectsToSave })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showCustomAlert('保存しました', window.innerWidth/2, 60);
+                fetchProjectList();
+            } else {
+                showCustomAlert('保存に失敗しました', window.innerWidth/2, 60);
+            }
+        };
+
+        document.getElementById('load-project-btn').onclick = async function() {
+            const select = document.getElementById('project-list-select');
+            const name = select.value;
+            if (!name) {
+                showCustomAlert('プロジェクトを選択してください', window.innerWidth/2, 60);
+                return;
+            }
+            const res = await fetch('/api/load_project?name=' + encodeURIComponent(name));
+            const data = await res.json();
+            if (data.success) {
+                // 既存オブジェクトを全削除
+                for (const id in objects) {
+                    if (objects[id].mesh) scene.remove(objects[id].mesh);
+                }
+                Object.keys(objects).forEach(id => delete objects[id]);
+                // 新しいオブジェクトを追加
+                for (const id in data.objects) {
+                    const obj = data.objects[id];
+                    // 既存add_objectロジックを流用
+                    addObjectFromServer(obj);
+                }
+                showCustomAlert('読込完了', window.innerWidth/2, 60);
+            } else {
+                showCustomAlert('読込に失敗しました', window.innerWidth/2, 60);
+            }
+        };
+
+        // ページロード時に一覧取得
+        fetchProjectList();
+
+        // --- サーバーから読込時のオブジェクト追加 ---
+        function addObjectFromServer(obj) {
+            // 既存のadd_objectイベントと同じ処理を呼び出す
+            // socket.on('add_object', ...) の中身を関数化して使うのが理想
+            // ここでは簡易的にsocketイベントを発火
+            // socket.emit('add_object', obj);
+            createObjectFromServer(obj);
+        }
+
+        function updateObjectState(id, mesh) {
+            if (objects[id]) {
+                objects[id].position = { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z };
+                objects[id].rotation = { x: mesh.rotation.x, y: mesh.rotation.y, z: mesh.rotation.z };
+                objects[id].scale = { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z };
+            }
+        }
+        console.log(objects);
     </script>
 </body>
 </html>

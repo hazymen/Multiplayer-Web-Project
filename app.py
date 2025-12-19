@@ -1,11 +1,81 @@
 
-from flask import Flask, render_template, request
+
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 import webbrowser
 import os
+import mysql.connector
+from mysql.connector import Error
+from db_config import DB_CONFIG
+
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+# --- MySQL接続ユーティリティ ---
+def get_db_connection():
+    try:
+        conn = mysql.connector.connect(**DB_CONFIG)
+        return conn
+    except Error as e:
+        print(f"DB接続エラー: {e}")
+        return None
+
+class ProjectDB:
+    @staticmethod
+    def save(name, objects_dict):
+        conn = get_db_connection()
+        if not conn:
+            return False
+        try:
+            cur = conn.cursor()
+            cur.execute("REPLACE INTO projects (name, data) VALUES (%s, %s)", (name, json.dumps(objects_dict, ensure_ascii=False)))
+            conn.commit()
+            cur.close()
+            return True
+        except Exception as e:
+            print(f"保存失敗: {e}")
+            return False
+        finally:
+            conn.close()
+
+    @staticmethod
+    def load(name):
+        conn = get_db_connection()
+        if not conn:
+            return None
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT data FROM projects WHERE name=%s", (name,))
+            row = cur.fetchone()
+            cur.close()
+            if row:
+                return json.loads(row[0])
+            return None
+        except Exception as e:
+            print(f"読込失敗: {e}")
+            return None
+        finally:
+            conn.close()
+
+    @staticmethod
+    def list_names():
+        conn = get_db_connection()
+        if not conn:
+            return []
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM projects")
+            names = [row[0] for row in cur.fetchall()]
+            cur.close()
+            return names
+        except Exception as e:
+            print(f"一覧取得失敗: {e}")
+            return []
+        finally:
+            conn.close()
+
+import json
 
 # オブジェクト削除イベント
 @socketio.on('delete_object')
@@ -65,6 +135,38 @@ def handle_disconnect():
     for oid in to_remove:
         del object_selected_by[oid]
         emit('object_deselected', {'id': oid}, broadcast=True)
+
+
+# --- プロジェクト保存API ---
+
+@app.route('/api/save_project', methods=['POST'])
+def api_save_project():
+    data = request.get_json()
+    name = data.get('name')
+    objects_dict = data.get('objects')
+    if not name or objects_dict is None:
+        return jsonify({'success': False, 'error': 'name/objects required'}), 400
+    result = ProjectDB.save(name, objects_dict)
+    return jsonify({'success': result})
+
+# --- プロジェクト読込API ---
+
+@app.route('/api/load_project', methods=['GET'])
+def api_load_project():
+    name = request.args.get('name')
+    if not name:
+        return jsonify({'success': False, 'error': 'name required'}), 400
+    objects_dict = ProjectDB.load(name)
+    if objects_dict is None:
+        return jsonify({'success': False, 'error': 'not found'}), 404
+    return jsonify({'success': True, 'objects': objects_dict})
+
+# --- プロジェクト名一覧API ---
+
+@app.route('/api/list_projects', methods=['GET'])
+def api_list_projects():
+    names = ProjectDB.list_names()
+    return jsonify({'success': True, 'projects': names})
 
 @app.route('/')
 def index():
