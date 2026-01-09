@@ -1,7 +1,7 @@
 
 
 from flask import Flask, render_template, request, jsonify
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room, leave_room
 import webbrowser
 import os
 import mysql.connector
@@ -11,6 +11,9 @@ from db_config import DB_CONFIG
 
 app = Flask(__name__)
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+# 各クライアントが参加している部屋を追跡: {sid: room_name}
+client_rooms = {}
 
 # --- MySQL接続ユーティリティ ---
 def get_db_connection():
@@ -77,20 +80,75 @@ class ProjectDB:
 
 import json
 
-# オブジェクト削除イベント
+# ルーム単位でのオブジェクト管理: {room_name: {object_id: obj}}
+room_objects = {}
+# ルーム単位でのオブジェクトIDカウンター: {room_name: counter}
+room_id_counter = {}
+# ルーム単位での選択状態管理: {room_name: {obj_id: sid}}
+room_object_selected_by = {}
+
+def get_room_for_client(sid):
+    """クライアントが参加している部屋を取得"""
+    return client_rooms.get(sid)
+
+def ensure_room_exists(room_name):
+    """部屋が存在することを確認"""
+    if room_name not in room_objects:
+        room_objects[room_name] = {}
+        room_id_counter[room_name] = 1
+        room_object_selected_by[room_name] = {}
+
+# --- 部屋への参加 ---
+@socketio.on('join_room')
+def handle_join_room(data):
+    room_name = data.get('room_name')
+    if not room_name:
+        emit('error', {'message': 'room_name required'})
+        return
+    
+    sid = request.sid
+    
+    # 既に別の部屋に参加していたら、そこから退出
+    if sid in client_rooms:
+        old_room = client_rooms[sid]
+        leave_room(old_room)
+        # 選択状態をクリア
+        if old_room in room_object_selected_by:
+            to_remove = [oid for oid, s in room_object_selected_by[old_room].items() if s == sid]
+            for oid in to_remove:
+                del room_object_selected_by[old_room][oid]
+                emit('object_deselected', {'id': oid}, room=old_room)
+    
+    # 新しい部屋に参加
+    client_rooms[sid] = room_name
+    join_room(room_name)
+    ensure_room_exists(room_name)
+    
+    # クライアントに現在の部屋のオブジェクト情報を送信
+    emit('init_objects', list(room_objects[room_name].values()))
+
+# --- オブジェクト削除イベント ---
 @socketio.on('delete_object')
 def handle_delete_object(data):
+    room = get_room_for_client(request.sid)
+    if not room:
+        return
+    
     obj_id = data['id']
-    if obj_id in objects:
-        del objects[obj_id]
+    if obj_id in room_objects[room]:
+        del room_objects[room][obj_id]
         # 選択状態も解除
-        if obj_id in object_selected_by:
-            del object_selected_by[obj_id]
-        emit('object_deleted', {'id': obj_id}, broadcast=True)
+        if obj_id in room_object_selected_by[room]:
+            del room_object_selected_by[room][obj_id]
+        emit('object_deleted', {'id': obj_id}, room=room)
 
-
+# --- 面編集イベント ---
 @socketio.on('edit_face')
 def handle_edit_face(data):
+    room = get_room_for_client(request.sid)
+    if not room:
+        return
+    
     obj_id = data['id']
     indices = data.get('face_indices')
     delta = data.get('delta')
@@ -99,58 +157,78 @@ def handle_edit_face(data):
         'face_indices': indices,
         'delta': delta,
         'childMeshIndex': data.get('childMeshIndex')
-    }, broadcast=True, include_self=False)
-    
-# オブジェクト情報を管理（id, type, position など）
+    }, room=room, broadcast=True, include_self=False)
 
-objects = {}
-object_id_counter = 1
-# 選択状態の管理: {オブジェクトid: 選択ユーザーのsid}
-object_selected_by = {}
-from flask import request
+# --- オブジェクト選択 ---
 @socketio.on('select_object')
 def handle_select_object(data):
+    room = get_room_for_client(request.sid)
+    if not room:
+        return
+    
     obj_id = data['id']
     sid = request.sid
+    
     # すでに他ユーザーが選択していないかチェック
-    if obj_id in object_selected_by and object_selected_by[obj_id] != sid:
+    if obj_id in room_object_selected_by[room] and room_object_selected_by[room][obj_id] != sid:
         emit('select_result', {'id': obj_id, 'result': False})
         return
-    object_selected_by[obj_id] = sid
-    emit('object_selected', {'id': obj_id, 'sid': sid}, broadcast=True)
+    
+    room_object_selected_by[room][obj_id] = sid
+    emit('object_selected', {'id': obj_id, 'sid': sid}, room=room)
     emit('select_result', {'id': obj_id, 'result': True})
 
+# --- オブジェクト選択解除 ---
 @socketio.on('deselect_object')
 def handle_deselect_object(data):
+    room = get_room_for_client(request.sid)
+    if not room:
+        return
+    
     obj_id = data['id']
     sid = request.sid
-    if obj_id in object_selected_by and object_selected_by[obj_id] == sid:
-        del object_selected_by[obj_id]
-        emit('object_deselected', {'id': obj_id}, broadcast=True)
+    
+    if obj_id in room_object_selected_by[room] and room_object_selected_by[room][obj_id] == sid:
+        del room_object_selected_by[room][obj_id]
+        emit('object_deselected', {'id': obj_id}, room=room)
+
+# --- 切断処理 ---
 @socketio.on('disconnect')
 def handle_disconnect():
-    # 切断時にそのユーザーが選択していたものを解除
     sid = request.sid
-    to_remove = [oid for oid, s in object_selected_by.items() if s == sid]
-    for oid in to_remove:
-        del object_selected_by[oid]
-        emit('object_deselected', {'id': oid}, broadcast=True)
+    room = client_rooms.get(sid)
+    
+    if room and room in room_object_selected_by:
+        # 切断時にそのユーザーが選択していたものを解除
+        to_remove = [oid for oid, s in room_object_selected_by[room].items() if s == sid]
+        for oid in to_remove:
+            del room_object_selected_by[room][oid]
+            emit('object_deselected', {'id': oid}, room=room)
+    
+    if sid in client_rooms:
+        del client_rooms[sid]
 
 
 # --- プロジェクト保存API ---
-
 @app.route('/api/save_project', methods=['POST'])
 def api_save_project():
     data = request.get_json()
     name = data.get('name')
     objects_dict = data.get('objects')
+    room = data.get('room')
+    
     if not name or objects_dict is None:
         return jsonify({'success': False, 'error': 'name/objects required'}), 400
+    
+    # 指定された部屋が有効な部屋であるかチェック
+    valid_rooms = ['a', 'b', 'c']
+    if room not in valid_rooms:
+        return jsonify({'success': False, 'error': 'invalid room'}), 400
+    
     result = ProjectDB.save(name, objects_dict)
     return jsonify({'success': result})
 
-# --- プロジェクト読込API ---
-
+# --- プロジェクト読込API（部屋の初期化用） ---
 @app.route('/api/load_project', methods=['GET'])
 def api_load_project():
     name = request.args.get('name')
@@ -162,7 +240,6 @@ def api_load_project():
     return jsonify({'success': True, 'objects': objects_dict})
 
 # --- プロジェクト名一覧API ---
-
 @app.route('/api/list_projects', methods=['GET'])
 def api_list_projects():
     names = ProjectDB.list_names()
@@ -174,14 +251,19 @@ def index():
 
 @socketio.on('connect')
 def handle_connect():
-    # 現在の全オブジェクト情報を新規クライアントに送信
-    emit('init_objects', list(objects.values()))
+    # 部屋参加待ち（join_roomイベント待ち）
+    pass
 
 @socketio.on('add_object')
 def handle_add_object(data):
-    global object_id_counter
+    room = get_room_for_client(request.sid)
+    if not room:
+        return
+    
+    ensure_room_exists(room)
+    
     obj = {
-        'id': object_id_counter,
+        'id': room_id_counter[room],
         'type': data['type'],
         'position': data['position'],
     }
@@ -198,41 +280,52 @@ def handle_add_object(data):
             obj['rotation'] = data['rotation']
         if 'scale' in data:
             obj['scale'] = data['scale']
-    objects[object_id_counter] = obj
-    object_id_counter += 1
-    emit('add_object', obj, broadcast=True)
+    
+    room_objects[room][room_id_counter[room]] = obj
+    room_id_counter[room] += 1
+    emit('add_object', obj, room=room)
 
-
-# --- 追加: 回転・スケール・全体同期イベント ---
+# --- 移動・回転・スケール操作 ---
 @socketio.on('move_object')
 def handle_move_object(data):
+    room = get_room_for_client(request.sid)
+    if not room or room not in room_objects:
+        return
+    
     obj_id = data['id']
-    if obj_id in objects:
-        objects[obj_id]['position'] = data['position']
-        # 既存のrotation/scaleも送る
+    if obj_id in room_objects[room]:
+        room_objects[room][obj_id]['position'] = data['position']
         emit('move_object', {
-            **objects[obj_id],
-        }, broadcast=True, include_self=False)
+            **room_objects[room][obj_id],
+        }, room=room, broadcast=True, include_self=False)
 
 @socketio.on('rotate_object')
 def handle_rotate_object(data):
+    room = get_room_for_client(request.sid)
+    if not room or room not in room_objects:
+        return
+    
     obj_id = data['id']
     rotation = data['rotation']
-    if obj_id in objects:
-        objects[obj_id]['rotation'] = rotation
+    if obj_id in room_objects[room]:
+        room_objects[room][obj_id]['rotation'] = rotation
         emit('rotate_object', {
-            **objects[obj_id],
-        }, broadcast=True, include_self=False)
+            **room_objects[room][obj_id],
+        }, room=room, broadcast=True, include_self=False)
 
 @socketio.on('scale_object')
 def handle_scale_object(data):
+    room = get_room_for_client(request.sid)
+    if not room or room not in room_objects:
+        return
+    
     obj_id = data['id']
     scale = data['scale']
-    if obj_id in objects:
-        objects[obj_id]['scale'] = scale
+    if obj_id in room_objects[room]:
+        room_objects[room][obj_id]['scale'] = scale
         emit('scale_object', {
-            **objects[obj_id],
-        }, broadcast=True, include_self=False)
+            **room_objects[room][obj_id],
+        }, room=room, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
     if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':

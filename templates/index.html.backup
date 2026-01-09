@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>MPCad</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        #room-selection-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        }
+        #room-selection-dialog {
+            background: #fff;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 500px;
+        }
+        #room-selection-dialog h2 {
+            margin: 0 0 20px 0;
+            color: #333;
+        }
+        #room-selection-dialog p {
+            margin: 0 0 20px 0;
+            color: #666;
+            font-size: 14px;
+        }
+        #room-list {
+            margin: 20px 0;
+            text-align: left;
+        }
+        .room-item {
+            padding: 10px;
+            margin: 5px 0;
+            background: #f5f5f5;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .room-item:hover {
+            background: #e0e0e0;
+        }
+        .room-item input[type="radio"] {
+            margin-right: 8px;
+        }
+        #room-enter-btn {
+            background: #2196f3;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        #room-enter-btn:hover {
+            background: #1976d2;
+        }
+        #main-ui {
+            display: none;
+        }
+        #current-room-info {
+            position: absolute;
+            top: 5px;
+            right: 10px;
+            color: #666;
+            font-size: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 部屋選択モーダル -->
+    <div id="room-selection-modal">
+        <div id="room-selection-dialog">
+            <h2>部屋を選択</h2>
+            <p>保存済みプロジェクトから入室する部屋を選択してください</p>
+            <div id="room-list"></div>
+            <button id="room-enter-btn">入室</button>
+        </div>
+    </div>
+
+    <!-- メインUI -->
+    <div id="main-ui">
+        <div id="current-room-info"></div>
+        <div id="menu-bar">
+            <p>MPCad</p>
+            <div style="display:inline-block;margin-left:24px;">
+                <input id="project-name-input" type="text" placeholder="プロジェクト名" style="width:120px;padding:4px 8px;border-radius:4px;border:1px solid #ccc;font-size:14px;">
+                <button id="save-project-btn" style="background:#43a047;color:#fff;border:none;padding:8px 12px;border-radius:4px;cursor:pointer;font-size:14px;margin-left:4px;">保存</button>
+            </div>
+            <div class="dropdown" id="add-dropdown">
+                <button class="dropdown-btn">追加</button>
+                <div class="dropdown-content">
+                    <button id="add-cube">立方体</button>
+                    <button id="add-sphere">球体</button>
+                    <button id="add-plane">平面</button>
+                    <button id="add-glb">モデル</button>
+                </div>
+            </div>
+            <button id="delete-btn" style="margin-left:12px;background:#e53935;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:16px;">削除</button>
+            <button id="mode-switch" style="margin-left:12px;background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:16px;">通常</button>
+        </div>
+        <div id="mode-bar">
+            <button id="mode-move" class="active mode-btn" style="position:relative;">移動</button>
+            <button id="mode-scale" class="mode-btn">寸法</button>
+            <button id="mode-rotate" class="mode-btn">回転</button>
+            <div id="move-coord-ui" style="display:none;">
+                <label style="color:#fff;font-size:12px;">X</label>
+                <input id="move-x" type="number" step="0.1" style="width:48px; font-size:12px; margin-right:2px;">
+                <label style="color:#fff;font-size:12px;">Y</label>
+                <input id="move-y" type="number" step="0.1" style="width:48px; font-size:12px; margin-right:2px;">
+                <label style="color:#fff;font-size:12px;">Z</label>
+                <input id="move-z" type="number" step="0.1" style="width:48px; font-size:12px; margin-right:2px;">
+                <button id="move-apply" style="font-size:12px; padding:2px 8px; border-radius:4px; background:#ff9800; color:#222; border:none; cursor:pointer;">移動</button>
+            </div>
+        </div>
+        <div id="custom-alert"></div>
+    </div>
+
+    <script src="https://unpkg.com/three@0.147.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://unpkg.com/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://unpkg.com/three@0.147.0/examples/js/controls/TransformControls.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        let objects = {};
+        let currentRoom = null;
+        const socket = io();
+        
+        // --- 部屋選択ロジック ---
+        async function initializeRoomSelection() {
+            const res = await fetch('/api/list_projects');
+            const data = await res.json();
+            if (data.success && data.projects.length > 0) {
+                const roomList = document.getElementById('room-list');
+                roomList.innerHTML = '';
+                data.projects.forEach((projectName, index) => {
+                    const label = document.createElement('label');
+                    label.className = 'room-item';
+                    const radio = document.createElement('input');
+                    radio.type = 'radio';
+                    radio.name = 'room';
+                    radio.value = projectName;
+                    if (index === 0) radio.checked = true;
+                    label.appendChild(radio);
+                    label.appendChild(document.createTextNode(projectName));
+                    roomList.appendChild(label);
+                });
+            }
+        }
+        
+        document.getElementById('room-enter-btn').onclick = async function() {
+            const selected = document.querySelector('input[name="room"]:checked');
+            if (!selected) {
+                alert('部屋を選択してください');
+                return;
+            }
+            currentRoom = selected.value;
+            // バックエンドに部屋参加を通知
+            socket.emit('join_room', { room_name: currentRoom });
+            
+            // 部屋選択モーダルを非表示、メインUIを表示
+            document.getElementById('room-selection-modal').style.display = 'none';
+            document.getElementById('main-ui').style.display = 'block';
+            
+            // 現在の部屋情報を表示
+            document.getElementById('current-room-info').textContent = `部屋: ${currentRoom}`;
+            
+            // Three.jsのレンダリング開始
+            startThreeJsRendering();
+        };
+        
+        // ページロード時に部屋一覧を取得
+        initializeRoomSelection();
+        
+        // --- Three.js初期化を遅延して実行 ---
+        let renderer, scene, camera, controls, transformControls;
+        
+        function startThreeJsRendering() {
+            // --- Three.js初期化 ---
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.domElement.style.marginTop = '48px'; // モードバー+メニューバー分の余白
+            document.body.appendChild(renderer.domElement);
+            camera.position.z = 5;
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = true;
+            controls.minDistance = 1;
+            controls.maxDistance = 1000;
+            transformControls = new THREE.TransformControls(camera, renderer.domElement);
+            scene.add(transformControls);
+            transformControls.setMode('translate');
+            transformControls.visible = false;
+            transformControls.addEventListener('dragging-changed', function (event) {
+                controls.enabled = !event.value;
+                if (!event.value) {
+                    transformControls.dragging = false;
+                    controls.enabled = true;
+                }
+            });
+
+            window.addEventListener('pointerup', function() {
+                if (transformControls.dragging) {
+                    transformControls.dragging = false;
+                    controls.enabled = true;
+                }
+            });
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+            const gridHelper = new THREE.GridHelper(40, 40, 0x888888, 0x444444);
+            gridHelper.position.set(0, 0, 0);
+            scene.add(gridHelper);
+            
+            // その他の処理を続行
+            setupSocketAndEvents();
+            animate();
+        }
+        
+        function setupSocketAndEvents() {
+            // ここに既存のSocket.IOイベントリスナーを移動
+
+
+
+        // --- 面編集用ハンドル ---
+        let faceHandles = [];
+        function showFaceHandles(mesh) {
+            removeFaceHandles();
+            // GLBモデル（Group/Scene）の場合は子Meshすべてにハンドルを表示
+            if (mesh.type === 'Group' || mesh.type === 'Scene') {
+                mesh.traverse(child => {
+                    if (child.isMesh && child.geometry && child.geometry.attributes && child.geometry.attributes.position && child.geometry.index) {
+                        _showFaceHandlesForMesh(child);
+                    }
+                });
+                return;
+            }
+            // 通常Mesh
+            if (mesh.geometry && mesh.geometry.attributes && mesh.geometry.attributes.position && mesh.geometry.index) {
+                _showFaceHandlesForMesh(mesh);
+            }
+        }
+
+        function _showFaceHandlesForMesh(mesh) {
+            const posAttr = mesh.geometry.attributes.position;
+            const indexAttr = mesh.geometry.index;
+            for (let i = 0; i < indexAttr.count; i += 3) {
+                const a = indexAttr.getX(i);
+                const b = indexAttr.getX(i + 1);
+                const c = indexAttr.getX(i + 2);
+                const va = new THREE.Vector3().fromBufferAttribute(posAttr, a);
+                const vb = new THREE.Vector3().fromBufferAttribute(posAttr, b);
+                const vc = new THREE.Vector3().fromBufferAttribute(posAttr, c);
+                // 面の中心
+                const center = new THREE.Vector3().addVectors(va, vb).add(vc).divideScalar(3).applyMatrix4(mesh.matrixWorld);
+                const handleGeom = new THREE.SphereGeometry(0.09, 12, 12);
+                const handleMat = new THREE.MeshBasicMaterial({ color: 0xff9800 });
+                const handle = new THREE.Mesh(handleGeom, handleMat);
+                handle.position.copy(center);
+                handle.userData.faceIndices = [a, b, c];
+                handle.userData.parentMesh = mesh;
+                handle.userData.faceIndex = i / 3;
+                faceHandles.push(handle);
+                scene.add(handle);
+            }
+        }
+        function removeFaceHandles() {
+            faceHandles.forEach(h => scene.remove(h));
+            faceHandles = [];
+        }
+
+
+        // 面ハンドルのドラッグ処理（undo記録）
+        let draggingHandle = null;
+        let dragOffset = new THREE.Vector3();
+        let dragPrevPositions = null;
+        renderer.domElement.addEventListener('pointerdown', (event) => {
+            // --- 面編集モードは廃止済み。mode変数は使わない ---
+            // if (mode !== 'edit') return;
+            // ここは今後、faceHandlesの有無で判定する
+            if (!faceHandles || faceHandles.length === 0) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(faceHandles, false);
+            if (intersects.length > 0) {
+                draggingHandle = intersects[0].object;
+                dragOffset.copy(draggingHandle.position);
+                controls.enabled = false; // ドラッグ中は視点操作を無効化
+                // --- undo記録 ---
+                const mesh = draggingHandle.userData.parentMesh;
+                const indices = draggingHandle.userData.faceIndices;
+                const posAttr = mesh.geometry.attributes.position;
+                dragPrevPositions = indices.map(idx => {
+                    return new THREE.Vector3().fromBufferAttribute(posAttr, idx);
+                });
+            }
+        });
+        renderer.domElement.addEventListener('pointermove', (event) => {
+            // --- 面編集モードは廃止済み。mode変数は使わない ---
+            // if (mode !== 'edit' || !draggingHandle) return;
+            if (!draggingHandle) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            // 平面上での移動（カメラ正面の平面）
+            const plane = new THREE.Plane();
+            plane.setFromNormalAndCoplanarPoint(camera.getWorldDirection(new THREE.Vector3()), draggingHandle.position);
+            const pointer = new THREE.Vector2(mouse.x, mouse.y);
+            const ray = raycaster.ray;
+            const intersection = new THREE.Vector3();
+            if (ray.intersectPlane(plane, intersection)) {
+                // 面の中心の移動量を計算
+                const delta = new THREE.Vector3().subVectors(intersection, draggingHandle.position);
+                draggingHandle.position.copy(intersection);
+                // 面の3頂点すべてを同じだけ移動
+                const mesh = draggingHandle.userData.parentMesh;
+                const indices = draggingHandle.userData.faceIndices;
+                const posAttr = mesh.geometry.attributes.position;
+                indices.forEach((idx, i) => {
+                    const prev = dragPrevPositions[i];
+                    mesh.geometry.attributes.position.setXYZ(idx, prev.x + delta.x, prev.y + delta.y, prev.z + delta.z);
+                });
+                mesh.geometry.attributes.position.needsUpdate = true;
+                // --- サーバーへ面編集を通知 ---
+                if (mesh.userData.serverId !== undefined) {
+                    let childMeshIndex = undefined;
+                    if ((mesh.parent && (mesh.parent.type === 'Group' || mesh.parent.type === 'Scene')) || mesh.type === 'Mesh') {
+                        const parent = mesh.parent;
+                        if (parent && parent.children) {
+                            childMeshIndex = parent.children.indexOf(mesh);
+                        }
+                    }
+                    socket.emit('edit_face', {
+                        id: mesh.userData.serverId,
+                        face_indices: indices,
+                        delta: { x: delta.x, y: delta.y, z: delta.z },
+                        childMeshIndex: childMeshIndex
+                    });
+                }
+            }
+        });
+        renderer.domElement.addEventListener('pointerup', () => {
+            if (draggingHandle) {
+                // --- undo記録 ---
+                if (dragPrevPositions) {
+                    const mesh = draggingHandle.userData.parentMesh;
+                    const indices = draggingHandle.userData.faceIndices;
+                    pushUndo({
+                        type: 'face',
+                        mesh: mesh,
+                        indices: [...indices],
+                        prev: dragPrevPositions.map(v => v.clone())
+                    });
+                }
+                draggingHandle = null;
+                dragPrevPositions = null;
+                controls.enabled = true; // ドラッグ終了で視点操作を有効化
+            }
+        });
+
+        // --- 削除ボタン処理 ---
+        document.getElementById('delete-btn').onclick = function() {
+            if (!selectedObjects || selectedObjects.length === 0) {
+                showCustomAlert('削除するオブジェクトを選択してください', window.innerWidth/2, 60);
+                return;
+            }
+            // 複数選択対応: 全て削除リクエスト
+            selectedObjects.forEach(obj => {
+                if (obj.userData && obj.userData.serverId) {
+                    socket.emit('delete_object', { id: obj.userData.serverId });
+                }
+            });
+        };
+        
+        // --- モード管理 ---
+        // --- モード管理を分離 ---
+        let drawMode = false; // 作図モードON/OFF
+        let opMode = 'move'; // 'move', 'scale', 'rotate'
+        let savedCameraPosition = null;
+        let savedCameraUp = null;
+        let savedControlsTarget = null;
+
+        document.getElementById('mode-move').onclick = () => setOpMode('move');
+        document.getElementById('mode-scale').onclick = () => setOpMode('scale');
+        document.getElementById('mode-rotate').onclick = () => setOpMode('rotate');
+        document.getElementById('mode-switch').onclick = () => setDrawMode(!drawMode);
+
+        function setDrawMode(on) {
+            if (drawMode === on) return;
+            drawMode = on;
+            // pointerイベントの状態をリセット
+            transformControls.detach();
+            controls.enabled = true;
+            
+            // ボタンのテキストと色を更新
+            const switchBtn = document.getElementById('mode-switch');
+            if (drawMode) {
+                switchBtn.textContent = '作図';
+                switchBtn.style.background = '#ff9800';
+                savedCameraPosition = camera.position.clone();
+                savedCameraUp = camera.up.clone();
+                savedControlsTarget = controls.target.clone();
+                camera.position.set(0, 20, 0);
+                camera.up.set(0, 0, -1);
+                camera.lookAt(0, 0, 0);
+                controls.target.set(0, 0, 0);
+                controls.enableRotate = false; // 左ドラッグ回転禁止
+                controls.enablePan = true;    // 右ドラッグ平行移動OK
+                controls.enableZoom = true;   // ホイールズームOK
+            } else {
+                switchBtn.textContent = '通常';
+                switchBtn.style.background = '#2196f3';
+                if (savedCameraPosition && savedCameraUp && savedControlsTarget) {
+                    camera.position.copy(savedCameraPosition);
+                    camera.up.copy(savedCameraUp);
+                    camera.lookAt(savedControlsTarget);
+                    controls.target.copy(savedControlsTarget);
+                }
+                controls.enableRotate = true; // 回転OK
+                controls.enablePan = true;    // 平行移動OK
+                controls.enableZoom = true;   // ズームOK
+                savedCameraPosition = null;
+                savedCameraUp = null;
+                savedControlsTarget = null;
+            }
+            // TransformControlsのpointerイベント状態をリセットするため再アタッチ
+            updateTransformControls();
+            updateModeBarUI();
+        }
+
+        function setOpMode(newMode) {
+            if (opMode === newMode) return;
+            opMode = newMode;
+            updateModeBarUI();
+            updateTransformControls();
+        }
+
+        function updateModeBarUI() {
+            // すべてのモードボタンのactiveを外す
+            document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
+            // 操作モードのボタンにactive
+            if (opMode === 'move') document.getElementById('mode-move').classList.add('active');
+            if (opMode === 'scale') document.getElementById('mode-scale').classList.add('active');
+            if (opMode === 'rotate') document.getElementById('mode-rotate').classList.add('active');
+            // 移動UIの表示切替
+            const moveUI = document.getElementById('move-coord-ui');
+            if (opMode === 'move' && selectedObject) {
+                const moveBtn = document.getElementById('mode-move');
+                const bar = document.getElementById('mode-bar');
+                const btnRect = moveBtn.getBoundingClientRect();
+                const barRect = bar.getBoundingClientRect();
+                moveUI.style.left = (barRect.right - barRect.left) + 'px';
+                moveUI.style.top = (moveBtn.offsetTop) + 'px';
+                moveUI.style.display = '';
+                updateMoveCoordUI();
+            } else {
+                moveUI.style.display = 'none';
+            }
+        }
+
+        function updateTransformControls() {
+            // pointerイベントの状態をリセットするため一度detach
+            transformControls.detach();
+            if (!selectedObject) {
+                transformControls.visible = false;
+                return;
+            }
+            if (opMode === 'move') {
+                transformControls.attach(selectedObject);
+                transformControls.setMode('translate');
+                transformControls.visible = true;
+            } else if (opMode === 'scale') {
+                transformControls.attach(selectedObject);
+                transformControls.setMode('scale');
+                transformControls.visible = true;
+            } else if (opMode === 'rotate') {
+                transformControls.attach(selectedObject);
+                transformControls.setMode('rotate');
+                transformControls.visible = true;
+            } else {
+                transformControls.visible = false;
+            }
+        }
+        // カスタムアラート表示関数
+        function showCustomAlert(msg, x, y) {
+            const alertDiv = document.getElementById('custom-alert');
+            alertDiv.textContent = msg;
+            alertDiv.style.left = x + 12 + 'px';
+            alertDiv.style.top = y + 12 + 'px';
+            alertDiv.style.display = 'block';
+            alertDiv.style.opacity = '1';
+            setTimeout(() => {
+                alertDiv.style.opacity = '0';
+                setTimeout(() => { alertDiv.style.display = 'none'; }, 200);
+            }, 1200);
+        }
+        // --- Socket.IO クライアント接続 ---
+        const socket = io();
+        // idとオブジェクトの対応表
+        const idToObject = {};
+        // サーバーから初期オブジェクトを受信
+        socket.on('init_objects', (objs) => {
+            objs.forEach(obj => {
+                createObjectFromServer(obj);
+            });
+        });
+            // サーバーから新規オブジェクト追加を受信
+        socket.on('add_object', (obj) => {
+            createObjectFromServer(obj);
+        });
+        // サーバーから移動イベントを受信
+        socket.on('move_object', (data) => {
+            const obj = idToObject[data.id];
+            if (obj) {
+                if (data.position) obj.position.set(data.position.x, data.position.y, data.position.z);
+                if (data.rotation) obj.rotation.set(data.rotation.x, data.rotation.y, data.rotation.z);
+                if (data.scale) obj.scale.set(data.scale.x, data.scale.y, data.scale.z);
+                updateObjectState(data.id, obj);
+            }
+        });
+        // サーバーから回転イベントを受信
+        socket.on('rotate_object', (data) => {
+            const obj = idToObject[data.id];
+            if (obj) {
+                if (data.rotation) obj.rotation.set(data.rotation.x, data.rotation.y, data.rotation.z);
+                if (data.position) obj.position.set(data.position.x, data.position.y, data.position.z);
+                if (data.scale) obj.scale.set(data.scale.x, data.scale.y, data.scale.z);
+                updateObjectState(data.id, obj);
+            }
+        });
+        // サーバーからスケールイベントを受信
+        socket.on('scale_object', (data) => {
+            const obj = idToObject[data.id];
+            if (obj) {
+                if (data.scale) obj.scale.set(data.scale.x, data.scale.y, data.scale.z);
+                if (data.position) obj.position.set(data.position.x, data.position.y, data.position.z);
+                if (data.rotation) obj.rotation.set(data.rotation.x, data.rotation.y, data.rotation.z);
+                updateObjectState(data.id, obj);
+            }
+        });
+        // --- 面編集のリアルタイム同期受信 ---
+        socket.on('edit_face', (data) => {
+            const obj = idToObject[data.id];
+            if (!obj) return;
+            let targetMesh = obj;
+            // GLBモデルの子Mesh指定がある場合
+            if (typeof data.childMeshIndex === 'number' && (obj.type === 'Group' || obj.type === 'Scene') && obj.children[data.childMeshIndex]) {
+                targetMesh = obj.children[data.childMeshIndex];
+            }
+            if (!targetMesh.geometry || !targetMesh.geometry.attributes || !targetMesh.geometry.attributes.position) return;
+            const indices = data.face_indices;
+            const delta = data.delta;
+            indices.forEach(idx => {
+                const posAttr = targetMesh.geometry.attributes.position;
+                const prev = new THREE.Vector3().fromBufferAttribute(posAttr, idx);
+                posAttr.setXYZ(idx, prev.x + delta.x, prev.y + delta.y, prev.z + delta.z);
+            });
+            targetMesh.geometry.attributes.position.needsUpdate = true;
+            // ハンドルも動かす
+            if (faceHandles) {
+                for (let h = 0; h < faceHandles.length; h++) {
+                    const handle = faceHandles[h];
+                    if (handle.userData.parentMesh === targetMesh && JSON.stringify(handle.userData.faceIndices) === JSON.stringify(indices)) {
+                        // ワールド座標に変換
+                        const posAttr = targetMesh.geometry.attributes.position;
+                        const va = new THREE.Vector3().fromBufferAttribute(posAttr, indices[0]);
+                        const vb = new THREE.Vector3().fromBufferAttribute(posAttr, indices[1]);
+                        const vc = new THREE.Vector3().fromBufferAttribute(posAttr, indices[2]);
+                        const center = new THREE.Vector3().addVectors(va, vb).add(vc).divideScalar(3).applyMatrix4(targetMesh.matrixWorld);
+                        handle.position.copy(center);
+                        break;
+                    }
+                }
+            }
+        });
+        // サーバーから受信したオブジェクトを生成
+        function createObjectFromServer(obj) {
+            // 既存IDの重複を避けて正しく復元
+            if (idToObject[obj.id]) {
+                scene.remove(idToObject[obj.id]);
+                delete idToObject[obj.id];
+            }
+            let mesh;
+            if (obj.type === 'cube') {
+                const geometry = new THREE.BoxGeometry(1, 1, 1);
+                const material = new THREE.MeshStandardMaterial({ color: obj.color || 0x00ff00 });
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(obj.position.x, obj.position.y, obj.position.z);
+                if (obj.rotation) mesh.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z);
+                if (obj.scale) mesh.scale.set(obj.scale.x, obj.scale.y, obj.scale.z);
+                scene.add(mesh);
+                selectableObjects.push(mesh);
+                idToObject[obj.id] = mesh;
+                mesh.userData.serverId = obj.id;
+            } else if (obj.type === 'sphere') {
+                const geometry = new THREE.SphereGeometry(0.5, 32, 32);
+                const material = new THREE.MeshStandardMaterial({ color: obj.color || 0x2196f3 });
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(obj.position.x, obj.position.y, obj.position.z);
+                if (obj.rotation) mesh.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z);
+                if (obj.scale) mesh.scale.set(obj.scale.x, obj.scale.y, obj.scale.z);
+                scene.add(mesh);
+                selectableObjects.push(mesh);
+                idToObject[obj.id] = mesh;
+                mesh.userData.serverId = obj.id;
+            } else if (obj.type === 'plane') {
+                const geometry = new THREE.PlaneGeometry(2, 2);
+                const material = new THREE.MeshStandardMaterial({ color: obj.color || 0x9e9e9e, side: THREE.DoubleSide });
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.position.set(obj.position.x, obj.position.y, obj.position.z);
+                if (obj.rotation) mesh.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z);
+                if (obj.scale) mesh.scale.set(obj.scale.x, obj.scale.y, obj.scale.z);
+                scene.add(mesh);
+                selectableObjects.push(mesh);
+                idToObject[obj.id] = mesh;
+                mesh.userData.serverId = obj.id;
+            } else if (obj.type === 'glb' && obj.modelName) {
+                // GLBモデルの場合（非同期）
+                const loader = new THREE.GLTFLoader();
+                loader.load(
+                    `/static/models/${obj.modelName}`,
+                    function (gltf) {
+                        const model = gltf.scene;
+                        model.position.set(obj.position.x, obj.position.y, obj.position.z);
+                        if (obj.rotation) model.rotation.set(obj.rotation.x, obj.rotation.y, obj.rotation.z);
+                        if (obj.scale) model.scale.set(obj.scale.x, obj.scale.y, obj.scale.z);
+                        scene.add(model);
+                        selectableObjects.push(model);
+                        idToObject[obj.id] = model;
+                        model.userData.serverId = obj.id;
+                        // GLBもobjectsに保存
+                        objects[obj.id] = {
+                            id: obj.id,
+                            type: obj.type,
+                            position: { x: model.position.x, y: model.position.y, z: model.position.z },
+                            rotation: { x: model.rotation.x, y: model.rotation.y, z: model.rotation.z },
+                            scale: { x: model.scale.x, y: model.scale.y, z: model.scale.z },
+                            color: obj.color || undefined,
+                            modelName: obj.modelName || undefined
+                        };
+                    },
+                    undefined,
+                    function (error) {
+                        console.error('GLBモデルの読み込みに失敗:', error);
+                    }
+                );
+                return;
+            } else {
+                return;
+            }
+            // 共通処理：全オブジェクトタイプで位置・回転・寸法・色を保存
+            objects[obj.id] = {
+                id: obj.id,
+                type: obj.type,
+                position: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z },
+                rotation: { x: mesh.rotation.x, y: mesh.rotation.y, z: mesh.rotation.z },
+                scale: { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z },
+                color: obj.color || undefined,
+                modelName: obj.modelName || undefined
+            };
+        }
+
+        // ...Three.js初期化は上部で1回のみ...
+
+        // GLBモデルを指定位置に配置する関数
+        function loadGLBModel(modelName, x, y, z) {
+            const loader = new THREE.GLTFLoader();
+            loader.load(
+                `/static/models/${modelName}`,
+                function (gltf) {
+                    const model = gltf.scene;
+                    model.position.set(x, y, z);
+                    scene.add(model);
+                    selectableObjects.push(model);
+                },
+                undefined,
+                function (error) {
+                    console.error('モデルの読み込みに失敗しました:', error);
+                }
+            );
+        }
+
+        // --- サーバーから削除通知を受信したらクライアント側でも削除 --- 
+        socket.on('object_deleted', (data) => {
+            const obj = idToObject[data.id];
+            if (obj) {
+                // シーンから削除
+                scene.remove(obj);
+                // selectableObjectsからも削除
+                const idx = selectableObjects.indexOf(obj);
+                if (idx >= 0) selectableObjects.splice(idx, 1);
+                delete idToObject[data.id];
+                // 選択解除
+                setSelectedObjects([]);
+            }
+        });
+
+        // 選択可能オブジェクト管理
+        const selectableObjects = [];
+        let selectedObjects = [];
+        let selectedObject = null; // 代表（TransformControls用）
+
+        // --- 選択状態の同期 ---
+        // 選択中のオブジェクトid→選択ユーザーsid
+        const selectedBy = {};
+        let mySid = null;
+        socket.on('connect', () => {
+            mySid = socket.id;
+        });
+        socket.on('object_selected', ({id, sid}) => {
+            selectedBy[id] = sid;
+            // 他人が選択した場合は色を赤に
+            const obj = idToObject[id];
+            if (obj && sid !== mySid) {
+                if (obj.material && obj.material.emissive !== undefined) {
+                    obj.material.emissive = new THREE.Color(0xff0000);
+                } else if (obj.type === 'Group' || obj.type === 'Scene') {
+                    obj.traverse(child => {
+                        if (child.material && child.material.emissive !== undefined) {
+                            child.material.emissive = new THREE.Color(0xff0000);
+                        }
+                    });
+                }
+            }
+        });
+        socket.on('object_deselected', ({id}) => {
+            delete selectedBy[id];
+            // 色を元に戻す
+            const obj = idToObject[id];
+            if (obj) {
+                if (obj.material && obj.material.emissive !== undefined) {
+                    obj.material.emissive = new THREE.Color(0x000000);
+                } else if (obj.type === 'Group' || obj.type === 'Scene') {
+                    obj.traverse(child => {
+                        if (child.material && child.material.emissive !== undefined) {
+                            child.material.emissive = new THREE.Color(0x000000);
+                        }
+                    });
+                }
+            }
+        });
+        // 選択リクエストの結果
+        socket.on('select_result', ({id, result}) => {
+            if (!result && idToObject[id]) {
+                // マウス座標取得
+                document.addEventListener('mousemove', function handler(e) {
+                    showCustomAlert('他のユーザーが選択中です', e.clientX, e.clientY);
+                    document.removeEventListener('mousemove', handler);
+                });
+            }
+        });
+
+        // 選択状態の見た目を変更する関数（複数対応）
+        function setSelectedObjects(objs) {
+            // 既存の選択解除処理
+            if (selectedObjects && selectedObjects.length > 0) {
+                selectedObjects.forEach(obj => {
+                    if (obj.material && obj.userData.originalColor !== undefined) {
+                        obj.material.color.set(obj.userData.originalColor);
+                        delete obj.userData.originalColor;
+                    }
+                    if (obj.children && obj.children.length > 0) {
+                        obj.traverse(child => {
+                            if (child.material && child.userData.originalColor !== undefined) {
+                                child.material.color.set(child.userData.originalColor);
+                                delete child.userData.originalColor;
+                            }
+                        });
+                    }
+                    transformControls.detach();
+                    transformControls.visible = false;
+                    if (typeof removeVertexHandles === 'function') removeVertexHandles();
+                    if (typeof removeFaceHandles === 'function') removeFaceHandles();
+                    if (obj.userData.serverId) {
+                        socket.emit('deselect_object', {id: obj.userData.serverId});
+                    }
+                });
+            }
+            selectedObjects = objs ? [...objs] : [];
+            selectedObject = selectedObjects.length > 0 ? selectedObjects[0] : null;
+            // --- 移動UIやTransformControlsの表示制御 ---
+            updateModeBarUI();
+            updateTransformControls();
+            if (selectedObjects.length > 0) {
+                selectedObjects.forEach(obj => {
+                    if (obj.userData.serverId) {
+                        socket.emit('select_object', {id: obj.userData.serverId});
+                    }
+                    if (obj.material) {
+                        if (obj.userData.originalColor === undefined) {
+                            obj.userData.originalColor = obj.material.color.getHex();
+                        }
+                        obj.material.color.set(0xffff00);
+                    }
+                    if (obj.children && obj.children.length > 0) {
+                        obj.traverse(child => {
+                            if (child.material) {
+                                if (child.userData.originalColor === undefined) {
+                                    child.userData.originalColor = child.material.color.getHex();
+                                }
+                                child.material.color.set(0xffff00);
+                            }
+                        });
+                    }
+                });
+            }
+        }
+        // --- 移動UIの値を現在の座標で更新する関数 ---
+        function updateMoveCoordUI() {
+            if (!selectedObject) return;
+            document.getElementById('move-x').value = selectedObject.position.x.toFixed(3);
+            document.getElementById('move-y').value = selectedObject.position.y.toFixed(3);
+            document.getElementById('move-z').value = selectedObject.position.z.toFixed(3);
+        }
+        // --- 移動UIのイベント ---
+        document.getElementById('move-apply').onclick = function() {
+            if (!selectedObject) return;
+            const x = parseFloat(document.getElementById('move-x').value);
+            const y = parseFloat(document.getElementById('move-y').value);
+            const z = parseFloat(document.getElementById('move-z').value);
+            if (isNaN(x) || isNaN(y) || isNaN(z)) return;
+            // undo記録
+            pushUndo({
+                type: 'move',
+                objs: [...selectedObjects],
+                prevPositions: selectedObjects.map(obj => obj.position.clone())
+            });
+            selectedObjects.forEach(obj => {
+                obj.position.set(x, y, z);
+                if (obj.userData.serverId) {
+                    socket.emit('move_object', {
+                        id: obj.userData.serverId,
+                        position: { x, y, z }
+                    });
+                }
+            });
+            updateMoveCoordUI();
+        };
+        // --- TransformControlsやサーバー同期で座標が変わったらUIも更新 ---
+        // TransformControlsのobjectChangeイベントでUI更新
+        transformControls.addEventListener('objectChange', function () {
+            if (opMode === 'move' && selectedObject) {
+                updateMoveCoordUI();
+            }
+        });
+        // サーバーからのmove_objectイベントでUI更新
+        socket.on('move_object', (data) => {
+            const obj = idToObject[data.id];
+            if (obj) {
+                obj.position.set(data.position.x, data.position.y, data.position.z);
+                if (opMode === 'move' && selectedObject === obj) {
+                    updateMoveCoordUI();
+                }
+            }
+        });
+
+        // 立方体を設置する関数
+        function addCube() {
+            socket.emit('add_object', {
+                type: 'cube',
+                position: { x: 0, y: 0, z: 0 },
+                color: 0x00ff00
+            });
+        }
+        // 球体を設置する関数
+        function addSphere() {
+            socket.emit('add_object', {
+                type: 'sphere',
+                position: { x: 0, y: 0, z: 0 },
+                color: 0x2196f3
+            });
+        }
+        // 平面を設置する関数
+        function addPlane() {
+            socket.emit('add_object', {
+                type: 'plane',
+                position: { x: 0, y: 0, z: 0 },
+                color: 0x9e9e9e
+            });
+        }
+
+        // メニューボタンイベント
+        document.getElementById('add-cube').onclick = addCube;
+        document.getElementById('add-sphere').onclick = addSphere;
+        document.getElementById('add-plane').onclick = addPlane;
+        document.getElementById('add-glb').onclick = addGLB;
+
+        function addGLB() {
+            socket.emit('add_object', {
+                type: 'glb',
+                modelName: 'test_obj.glb',
+                position: { x: 0, y: 0, z: 0 },
+                rotation: { x: 0, y: 0, z: 0 },
+                scale: { x: 1, y: 1, z: 1 }
+            });
+        }
+
+        // オブジェクト選択処理
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        renderer.domElement.addEventListener('pointerdown', (event) => {
+            // TransformControlsのドラッグ中は絶対に選択処理をしない
+            if (transformControls.dragging) return;
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(selectableObjects, true);
+            if (intersects.length > 0) {
+                let obj = intersects[0].object;
+                // GLBモデルの子ノードをクリックした場合は親gltf.sceneを選択
+                while (obj && !obj.userData.serverId && obj.parent) {
+                    obj = obj.parent;
+                }
+                // 他ユーザーが選択中なら選択不可
+                if (obj.userData.serverId && selectedBy[obj.userData.serverId] && selectedBy[obj.userData.serverId] !== mySid) {
+                    showCustomAlert('他のユーザーが選択中です', event.clientX, event.clientY);
+                    return;
+                }
+                if (event.shiftKey) {
+                    // Shift+クリック: 追加/解除
+                    let newSelected = [...selectedObjects];
+                    const idx = newSelected.indexOf(obj);
+                    if (idx >= 0) {
+                        newSelected.splice(idx, 1);
+                    } else {
+                        newSelected.push(obj);
+                    }
+                    setSelectedObjects(newSelected);
+                } else {
+                    setSelectedObjects([obj]);
+                }
+            } else {
+                setSelectedObjects([]);
+            }
+        });
+
+        // --- Undoスタック ---
+        const undoStack = [];
+        function pushUndo(action) {
+            undoStack.push(action);
+            if (undoStack.length > 100) undoStack.shift(); // 履歴上限
+        }
+        function popUndo() {
+            return undoStack.pop();
+        }
+        // --- Undo実行 ---
+        function performUndo() {
+            const action = popUndo();
+            if (!action) return;
+            if (action.type === 'move') {
+                // 複数移動対応
+                action.objs.forEach((obj, i) => {
+                    obj.position.copy(action.prevPositions[i]);
+                    if (obj.userData.serverId) {
+                        socket.emit('move_object', {
+                            id: obj.userData.serverId,
+                            position: {
+                                x: obj.position.x,
+                                y: obj.position.y,
+                                z: obj.position.z
+                            }
+                        });
+                    }
+                });
+                // --- 移動UIの値も更新 ---
+                if (mode === 'move' && selectedObject) {
+                    updateMoveCoordUI();
+                }
+            } else if (action.type === 'rotate') {
+                action.objs.forEach((obj, i) => {
+                    obj.rotation.copy(action.prevRotations[i]);
+                    if (obj.userData.serverId) {
+                        socket.emit('rotate_object', {
+                            id: obj.userData.serverId,
+                            rotation: {
+                                x: obj.rotation.x,
+                                y: obj.rotation.y,
+                                z: obj.rotation.z
+                            }
+                        });
+                    }
+                });
+            } else if (action.type === 'scale') {
+                action.objs.forEach((obj, i) => {
+                    obj.scale.copy(action.prevScales[i]);
+                    if (obj.userData.serverId) {
+                        socket.emit('scale_object', {
+                            id: obj.userData.serverId,
+                            scale: {
+                                x: obj.scale.x,
+                                y: obj.scale.y,
+                                z: obj.scale.z
+                            }
+                        });
+                    }
+                });
+            } else if (action.type === 'face') {
+                // 面編集undo
+                const mesh = action.mesh;
+                action.indices.forEach((idx, i) => {
+                    mesh.geometry.attributes.position.setXYZ(idx, action.prev[i].x, action.prev[i].y, action.prev[i].z);
+                });
+                mesh.geometry.attributes.position.needsUpdate = true;
+                if (mesh.userData.serverId) {
+                    socket.emit('edit_face', {
+                        id: mesh.userData.serverId,
+                        face_indices: action.indices,
+                        delta: { x: 0, y: 0, z: 0 } // undo時は他クライアント側で何もしない
+                    });
+                }
+            }
+        }
+        // --- Ctrl+ZでUndo ---
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                performUndo();
+                e.preventDefault();
+            }
+        });
+
+        // TransformControlsで移動・回転・スケールしたらサーバーに通知（undo記録もmodeごとに）
+        let lastPosition = null;
+        let dragStartPositions = null;
+        let dragStartRotations = null;
+        let dragStartScales = null;
+        transformControls.addEventListener('mouseDown', function () {
+            if (selectedObject) {
+                lastPosition = selectedObject.position.clone();
+                dragStartPositions = selectedObjects.map(obj => obj.position.clone());
+                dragStartRotations = selectedObjects.map(obj => obj.rotation.clone());
+                dragStartScales = selectedObjects.map(obj => obj.scale.clone());
+            }
+        });
+        transformControls.addEventListener('objectChange', function () {
+            if (selectedObject && lastPosition) {
+                const delta = new THREE.Vector3().subVectors(selectedObject.position, lastPosition);
+                // 代表以外も同じだけ移動/回転/スケール
+                for (let i = 1; i < selectedObjects.length; i++) {
+                    const obj = selectedObjects[i];
+                    if (!obj.userData.serverId) continue;
+                    if (opMode === 'move') {
+                        obj.position.add(delta);
+                        socket.emit('move_object', {
+                            id: obj.userData.serverId,
+                            position: {
+                                x: obj.position.x,
+                                y: obj.position.y,
+                                z: obj.position.z
+                            }
+                        });
+                    } else if (opMode === 'rotate') {
+                        obj.rotation.copy(selectedObject.rotation);
+                        socket.emit('rotate_object', {
+                            id: obj.userData.serverId,
+                            rotation: {
+                                x: obj.rotation.x,
+                                y: obj.rotation.y,
+                                z: obj.rotation.z
+                            }
+                        });
+                    } else if (opMode === 'scale') {
+                        obj.scale.copy(selectedObject.scale);
+                        socket.emit('scale_object', {
+                            id: obj.userData.serverId,
+                            scale: {
+                                x: obj.scale.x,
+                                y: obj.scale.y,
+                                z: obj.scale.z
+                            }
+                        });
+                    }
+                }
+                // 代表もサーバー通知
+                if (selectedObject.userData && selectedObject.userData.serverId) {
+                    if (opMode === 'move') {
+                        socket.emit('move_object', {
+                            id: selectedObject.userData.serverId,
+                            position: {
+                                x: selectedObject.position.x,
+                                y: selectedObject.position.y,
+                                z: selectedObject.position.z
+                            }
+                        });
+                        lastPosition = selectedObject.position.clone();
+                    } else if (opMode === 'rotate') {
+                        socket.emit('rotate_object', {
+                            id: selectedObject.userData.serverId,
+                            rotation: {
+                                x: selectedObject.rotation.x,
+                                y: selectedObject.rotation.y,
+                                z: selectedObject.rotation.z
+                            }
+                        });
+                    } else if (opMode === 'scale') {
+                        socket.emit('scale_object', {
+                            id: selectedObject.userData.serverId,
+                            scale: {
+                                x: selectedObject.scale.x,
+                                y: selectedObject.scale.y,
+                                z: selectedObject.scale.z
+                            }
+                        });
+                    }
+                }
+                // 移動UIの値も更新
+                if (opMode === 'move' && selectedObject) {
+                    updateMoveCoordUI();
+                }
+            }
+        });
+        transformControls.addEventListener('mouseUp', function () {
+            if (selectedObjects.length > 0) {
+                // 終了時の値
+                const endPositions = selectedObjects.map(obj => obj.position.clone());
+                const endRotations = selectedObjects.map(obj => obj.rotation.clone());
+                const endScales = selectedObjects.map(obj => obj.scale.clone());
+                // どれか1つでも動いていれば履歴push
+                if (opMode === 'move') {
+                    let moved = false;
+                    for (let i = 0; i < dragStartPositions.length; i++) {
+                        if (!dragStartPositions[i].equals(endPositions[i])) {
+                            moved = true;
+                            break;
+                        }
+                    }
+                    if (moved) {
+                        pushUndo({
+                            type: 'move',
+                            objs: [...selectedObjects],
+                            prevPositions: dragStartPositions.map(p => p.clone())
+                        });
+                    }
+                } else if (opMode === 'rotate') {
+                    let rotated = false;
+                    for (let i = 0; i < dragStartRotations.length; i++) {
+                        if (!dragStartRotations[i].equals(endRotations[i])) {
+                            rotated = true;
+                            break;
+                        }
+                    }
+                    if (rotated) {
+                        pushUndo({
+                            type: 'rotate',
+                            objs: [...selectedObjects],
+                            prevRotations: dragStartRotations.map(r => r.clone())
+                        });
+                    }
+                } else if (opMode === 'scale') {
+                    let scaled = false;
+                    for (let i = 0; i < dragStartScales.length; i++) {
+                        if (!dragStartScales[i].equals(endScales[i])) {
+                            scaled = true;
+                            break;
+                        }
+                    }
+                    if (scaled) {
+                        pushUndo({
+                            type: 'scale',
+                            objs: [...selectedObjects],
+                            prevScales: dragStartScales.map(s => s.clone())
+                        });
+                    }
+                }
+            }
+            lastPosition = null;
+            dragStartPositions = null;
+            dragStartRotations = null;
+            dragStartScales = null;
+        });
+
+        // アニメーションループ
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+        // 例: sample.glb を (0,0,0) に配置する場合
+        // loadGLBModel('test_obj.glb', 0, 0, 0);
+
+        // --- プロジェクト保存・読込UI連携 ---
+        async function fetchProjectList() {
+            const res = await fetch('/api/list_projects');
+            const data = await res.json();
+            if (data.success) {
+                const select = document.getElementById('project-list-select');
+                select.innerHTML = '';
+                data.projects.forEach(name => {
+                    const opt = document.createElement('option');
+                    opt.value = name;
+                    opt.textContent = name;
+                    select.appendChild(opt);
+                });
+            }
+        }
+
+        document.getElementById('save-project-btn').onclick = async function() {
+            const name = document.getElementById('project-name-input').value.trim();
+            if (!name) {
+                showCustomAlert('プロジェクト名を入力してください', window.innerWidth/2, 60);
+                return;
+            }
+            // サーバーに送るオブジェクト情報を生成
+            // Three.jsの現在の状態から位置・回転・寸法を取得
+            const objectsToSave = {};
+            for (const id in idToObject) {
+                const mesh = idToObject[id];
+                if (mesh && objects[id]) {
+                    // 現在のThree.jsの位置・回転・寸法を反映
+                    objects[id].position = { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z };
+                    objects[id].rotation = { x: mesh.rotation.x, y: mesh.rotation.y, z: mesh.rotation.z };
+                    objects[id].scale = { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z };
+                }
+                objectsToSave[id] = objects[id];
+            }
+            const res = await fetch('/api/save_project', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, objects: objectsToSave })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showCustomAlert('保存しました', window.innerWidth/2, 60);
+                fetchProjectList();
+            } else {
+                showCustomAlert('保存に失敗しました', window.innerWidth/2, 60);
+            }
+        };
+
+        document.getElementById('load-project-btn').onclick = async function() {
+            const select = document.getElementById('project-list-select');
+            const name = select.value;
+            if (!name) {
+                showCustomAlert('プロジェクトを選択してください', window.innerWidth/2, 60);
+                return;
+            }
+            const res = await fetch('/api/load_project?name=' + encodeURIComponent(name));
+            const data = await res.json();
+            if (data.success) {
+                // 既存オブジェクトを全削除
+                for (const id in objects) {
+                    if (objects[id].mesh) scene.remove(objects[id].mesh);
+                }
+                Object.keys(objects).forEach(id => delete objects[id]);
+                // 新しいオブジェクトを追加
+                for (const id in data.objects) {
+                    const obj = data.objects[id];
+                    // 既存add_objectロジックを流用
+                    addObjectFromServer(obj);
+                }
+                showCustomAlert('読込完了', window.innerWidth/2, 60);
+            } else {
+                showCustomAlert('読込に失敗しました', window.innerWidth/2, 60);
+            }
+        };
+
+        // ページロード時に一覧取得
+        fetchProjectList();
+
+        // --- サーバーから読込時のオブジェクト追加 ---
+        function addObjectFromServer(obj) {
+            // 既存のadd_objectイベントと同じ処理を呼び出す
+            // socket.on('add_object', ...) の中身を関数化して使うのが理想
+            // ここでは簡易的にsocketイベントを発火
+            // socket.emit('add_object', obj);
+            createObjectFromServer(obj);
+        }
+
+        function updateObjectState(id, mesh) {
+            if (objects[id]) {
+                objects[id].position = { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z };
+                objects[id].rotation = { x: mesh.rotation.x, y: mesh.rotation.y, z: mesh.rotation.z };
+                objects[id].scale = { x: mesh.scale.x, y: mesh.scale.y, z: mesh.scale.z };
+            }
+        }
+        console.log(objects);
+    </script>
+</body>
+</html>
