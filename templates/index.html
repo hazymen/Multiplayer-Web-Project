@@ -8,7 +8,7 @@
 </head>
 <body>
     <div id="menu-bar">
-        <p>MPCad</p>
+        <p>MP-CAD</p>
         <div class="dropdown" id="add-dropdown">
             <button class="dropdown-btn">追加</button>
             <div class="dropdown-content">
@@ -20,6 +20,7 @@
         </div>
         <button id="delete-btn" style="margin-left:12px;background:#e53935;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:16px;">削除</button>
         <button id="mode-switch" style="margin-left:12px;background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:16px;">通常</button>
+        <button id="exit-btn" style="margin-left:12px;background:#ff6b6b;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:16px;">退室</button>
         
         <!-- 他のメニューボタンがあればここに -->
     </div>
@@ -242,6 +243,14 @@
                 }
             });
         };
+
+        // --- 退室ボタン処理 ---
+        document.getElementById('exit-btn').onclick = function() {
+            if (confirm('ロビーに戻ります。よろしいですか？')) {
+                socket.disconnect();
+                window.location.href = '/';
+            }
+        };
         
         // --- モード管理 ---
         // --- モード管理を分離 ---
@@ -366,7 +375,27 @@
             }, 1200);
         }
         // --- Socket.IO クライアント接続 ---
+        // URLから部屋番号を取得
+        const pathParts = window.location.pathname.split('/');
+        const roomNumber = parseInt(pathParts[pathParts.length - 1]);
+        
+        if (!roomNumber || roomNumber < 1 || roomNumber > 3) {
+            alert('無効な部屋番号です。ロビーに戻ります。');
+            window.location.href = '/';
+        }
+        
         const socket = io();
+        
+        // Socket.io接続後、部屋に入る
+        socket.on('connect', () => {
+            socket.emit('join_room', { room: roomNumber }, (response) => {
+                if (!response) {
+                    alert('部屋に入室できませんでした。');
+                    window.location.href = '/';
+                }
+            });
+        });
+        
         // idとオブジェクトの対応表
         const idToObject = {};
         // サーバーから初期オブジェクトを受信

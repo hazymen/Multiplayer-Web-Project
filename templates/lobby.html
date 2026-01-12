@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MPCad - ロビー</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #menu-bar {
+            width: 100vw;
+            height: 48px;
+            background: #333;
+            color: #fff;
+            padding: 0 16px;
+            display: flex;
+            justify-content: flex-start;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            z-index: 100;
+        }
+
+        #menu-bar p {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 0;
+        }
+
+        #lobby-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 40px 20px;
+        }
+
+        #lobby-content {
+            text-align: center;
+            background: #222;
+            border-radius: 8px;
+            padding: 40px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 100%;
+        }
+
+        h2 {
+            font-size: 28px;
+            margin-bottom: 30px;
+            color: #fff;
+        }
+
+        .room-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 30px;
+        }
+
+        .room-btn {
+            background: #555;
+            color: #fff;
+            border: none;
+            padding: 30px 16px;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .room-btn:hover {
+            background: #666;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .room-btn:active {
+            background: #777;
+        }
+
+        .room-info {
+            color: #aaa;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+
+        .status-message {
+            color: #ff9800;
+            font-size: 14px;
+            min-height: 20px;
+            margin-bottom: 20px;
+        }
+
+        .user-count {
+            background: #333;
+            color: #aaa;
+            padding: 16px;
+            border-radius: 4px;
+            margin-top: 20px;
+            font-size: 13px;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ff9800;
+            margin-right: 5px;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="menu-bar">
+        <p>MP-CAD</p>
+    </div>
+
+    <div id="lobby-container">
+        <div id="lobby-content">
+            <h2>ロビー</h2>
+
+            <div class="status-message" id="statusMessage"></div>
+
+            <p style="color: #ccc; margin-bottom: 24px; font-size: 14px;">入る部屋を選んでください</p>
+
+            <div class="room-grid" id="roomsContainer">
+                <button class="room-btn" onclick="joinRoom(1)">
+                    <div>部屋 1</div>
+                    <div class="room-info" id="count-1">-人</div>
+                </button>
+                <button class="room-btn" onclick="joinRoom(2)">
+                    <div>部屋 2</div>
+                    <div class="room-info" id="count-2">-人</div>
+                </button>
+                <button class="room-btn" onclick="joinRoom(3)">
+                    <div>部屋 3</div>
+                    <div class="room-info" id="count-3">-人</div>
+                </button>
+            </div>
+
+            <div class="user-count" id="userCount">サーバーに接続中...</div>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        let socket = null;
+        const roomUserCounts = { 1: 0, 2: 0, 3: 0 };
+
+        // Socket.io接続初期化
+        function initSocket() {
+            socket = io();
+
+            socket.on('connect', () => {
+                document.getElementById('userCount').textContent = 'サーバーに接続しました';
+                document.getElementById('statusMessage').textContent = '接続しました';
+                setTimeout(() => {
+                    document.getElementById('statusMessage').textContent = '';
+                }, 2000);
+                requestRoomUsers();
+            });
+
+            socket.on('room_users', (data) => {
+                roomUserCounts[1] = data.room1 || 0;
+                roomUserCounts[2] = data.room2 || 0;
+                roomUserCounts[3] = data.room3 || 0;
+                updateRoomCounts();
+                updateUserCountStatus();
+            });
+
+            socket.on('disconnect', () => {
+                document.getElementById('userCount').textContent = '接続が切断されました';
+                document.getElementById('statusMessage').textContent = '接続が切断されました';
+            });
+
+            socket.on('error', (error) => {
+                document.getElementById('statusMessage').textContent = 'エラー: ' + error;
+            });
+        }
+
+        // 部屋のユーザー数を更新
+        function updateRoomCounts() {
+            for (let i = 1; i <= 3; i++) {
+                const count = roomUserCounts[i];
+                document.getElementById(`count-${i}`).textContent = count + '人';
+            }
+        }
+
+        // ユーザー数ステータスを更新
+        function updateUserCountStatus() {
+            const total = roomUserCounts[1] + roomUserCounts[2] + roomUserCounts[3];
+            document.getElementById('userCount').textContent = `接続中: ${total}人 (部屋1: ${roomUserCounts[1]} 部屋2: ${roomUserCounts[2]} 部屋3: ${roomUserCounts[3]})`;
+        }
+
+        // 部屋のユーザー数を要求
+        function requestRoomUsers() {
+            if (socket) {
+                socket.emit('get_room_users');
+            }
+        }
+
+        // 部屋に入る
+        function joinRoom(roomNumber) {
+            if (!socket || !socket.connected) {
+                alert('サーバーに接続されていません');
+                return;
+            }
+
+            document.getElementById('statusMessage').innerHTML = 
+                '<span class="loading"></span>入室中...';
+
+            // 部屋に入る
+            socket.emit('join_room', { room: roomNumber }, (response) => {
+                if (response && response.success) {
+                    // ページをリダイレクト
+                    window.location.href = `/room/${roomNumber}`;
+                } else {
+                    document.getElementById('statusMessage').textContent = 
+                        '入室できませんでした';
+                }
+            });
+        }
+
+        // 1秒ごとに部屋のユーザー数を更新
+        setInterval(() => {
+            if (socket && socket.connected) {
+                requestRoomUsers();
+            }
+        }, 2000);
+
+        // ページ読み込み時に接続
+        window.addEventListener('load', () => {
+            initSocket();
+        });
+
+        // ページ離脱時にソケットを切断
+        window.addEventListener('beforeunload', () => {
+            if (socket) {
+                socket.disconnect();
+            }
+        });
+    </script>
+</body>
+</html>
