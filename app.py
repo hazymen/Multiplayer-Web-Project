@@ -23,7 +23,7 @@ room_object_id_counter = {
 
 # 部屋ごとの選択状態管理
 room_object_selected_by = {
-    1: {},
+    1: {}, 
     2: {},
     3: {}
 }
