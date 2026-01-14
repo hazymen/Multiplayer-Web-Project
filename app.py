@@ -259,10 +259,25 @@ def handle_scale_object(data):
 if __name__ == '__main__':
     # ブラウザを自動で開く
     import threading
+    import socket
+    
+    def get_local_ip():
+        """ローカルネットワークIPを取得"""
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+        except Exception:
+            ip = '127.0.0.1'
+        finally:
+            s.close()
+        return ip
+    
     def open_browser():
         import time
         time.sleep(1)  # サーバー起動を待つ
-        webbrowser.open('http://localhost:5000/')
+        local_ip = get_local_ip()
+        webbrowser.open(f'http://{local_ip}:5000/')
     
     thread = threading.Thread(target=open_browser, daemon=True)
     thread.start()
