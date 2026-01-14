@@ -257,6 +257,14 @@ def handle_scale_object(data):
         }, to=f'room_{room}', include_self=False)
 
 if __name__ == '__main__':
-    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    # ブラウザを自動で開く
+    import threading
+    def open_browser():
+        import time
+        time.sleep(1)  # サーバー起動を待つ
         webbrowser.open('http://localhost:5000/')
+    
+    thread = threading.Thread(target=open_browser, daemon=True)
+    thread.start()
+    
     socketio.run(app, host="0.0.0.0", debug=False)
